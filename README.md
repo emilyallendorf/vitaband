@@ -1,1 +1,1 @@
-firmware
+Firmware and PCB schematics
