@@ -26,6 +26,7 @@
 typedef struct {
     uint8_t heart_rate;
     float temperature;
+    uint8_t acceleration;
     uint32_t timestamp;
 } sensor_data_t;
 

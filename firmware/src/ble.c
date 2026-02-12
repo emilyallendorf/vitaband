@@ -47,3 +47,19 @@ void ble_stop_advertising(void) {
 bool ble_is_connected(void) {
     return ble_connected;
 }
+
+void send_ble_data(const sensor_data_t *data) {
+    if (!ble_connected) {
+        return;
+    }
+    
+    // Send combined data packet
+    // Format: [HR (1 byte)][Temp (4 bytes float)][Timestamp (4 bytes)]
+    uint8_t packet[9];
+    packet[0] = data->heart_rate;
+    memcpy(&packet[1], &data->temperature, sizeof(float));
+    memcpy(&packet[5], &data->timestamp, sizeof(uint32_t));
+    
+    // Send notification to phone
+    // ble_notify(combined_data_char_handle, packet, sizeof(packet));
+}
