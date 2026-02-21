@@ -3,7 +3,20 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(peripheral_hr_1)
+project(vitaband_firmware)
+
+target_sources(app PRIVATE
+    src/main.c
+    src/ble.c
+    src/power.c
+    src/sensors.c
+    drivers/src/max30102.c
+)
+
+target_include_directories(app PUBLIC 
+    inc 
+    drivers/inc
+)
 
 FILE(GLOB app_sources src/*.c)
 target_sources(app PRIVATE

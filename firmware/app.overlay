@@ -1,12 +1,11 @@
 &i2c0 {
-	status = "okay";
-	pinctrl-0 = <&i2c0_default>;
-	pinctrl-1 = <&i2c0_sleep>;
-	pinctrl-names = "default", "sleep";
-    
-	/* Where the hr sensor 'lives' on the I2C bus */
-	my_hr_sensor: hr_sensor@57 {
-		compatible = "i2c-device";
-		reg = <0x57>; /* 0x57 is a common address for HR sensors */
-	};
+    status = "okay";
+    pinctrl-0 = <&i2c0_default>;
+    pinctrl-1 = <&i2c0_sleep>;
+    pinctrl-names = "default", "sleep";
+
+    max30102: max30102@57 {
+        compatible = "i2c-device";
+        reg = <0x57>;
+    };
 };

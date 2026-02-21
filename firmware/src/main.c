@@ -109,13 +109,7 @@ static void bas_notify(void)
 
 static void hrs_notify(void)
 {
-	static uint8_t heartrate = 90U;
-
-	/* Heartrate measurements simulation */
-	heartrate++;
-	if (heartrate == 160U) {
-		heartrate = 90U;
-	}
+	uint8_t heartrate = max30102_read_heartrate();
 
 	if (hrf_ntf_enabled) {
 		bt_hrs_notify(heartrate);
@@ -204,6 +198,9 @@ int main(void)
 	bt_conn_auth_cb_register(&auth_cb_display);
 
 	bt_hrs_cb_register(&hrs_cb);
+
+	// Sensor initialization
+	max30102_init();
 
 #if !defined(CONFIG_BT_EXT_ADV)
 	printk("Starting Legacy Advertising (connectable and scannable)\n");
