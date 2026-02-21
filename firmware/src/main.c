@@ -18,6 +18,8 @@
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/bluetooth/services/hrs.h>
 
+#include <sensors.h>
+
 static bool hrf_ntf_enabled;
 
 static const struct bt_data ad[] = {
@@ -199,8 +201,14 @@ int main(void)
 
 	bt_hrs_cb_register(&hrs_cb);
 
-	// Sensor initialization
-	max30102_init();
+	// Sensor initialization TODO: delays?
+	heart_rate_sensor_init();
+	temperature_sensor_init(BODY);
+	temperature_sensor_init(AMBIENT);
+	heart_rate_sensor_calibrate();
+	temperature_sensor_calibrate(BODY);
+	temperature_sensor_calibrate(AMBIENT);
+	bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
 
 #if !defined(CONFIG_BT_EXT_ADV)
 	printk("Starting Legacy Advertising (connectable and scannable)\n");
@@ -266,7 +274,11 @@ int main(void)
 	while (1) {
 		k_sleep(K_SECONDS(1));
 
-		/* Heartrate measurements simulation */
+		/* sensor measurements simulation */
+		uint8_t hr = read_heart_rate();
+		float body_temp = read_temperature(BODY);
+		float ambient_temp = read_temperature(AMBIENT);
+		device_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
 		hrs_notify();
 
 		/* Battery level simulation */

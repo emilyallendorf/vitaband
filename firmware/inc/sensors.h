@@ -6,22 +6,37 @@
 #ifndef SENSORS_H
 #define SENSORS_H
 
+#include <stdbool.h>
+#include "max30102.h"
+#include "tmp117.h"
+#include "sht3x-dis.h"
 #include <stdint.h>
+
+
+typedef enum {
+    BODY,    
+    AMBIENT
+} temp_sensor_type_t;
+
+typedef struct {
+    bool body;
+    bool ambient;
+} temp_sensor_states_t;
 
 // Sensor initialization
 void heart_rate_sensor_init(void);
-void temperature_sensor_init(void);
+void temperature_sensor_init(temp_sensor_type_t);
 
 // Sensor reading functions
-uint8_t read_heart_rate(void);      // Returns BPM (0-255)
-float read_temperature(void);       // Returns temperature in Celsius
+uint8_t read_heart_rate(void); // Returns BPM (0-255)
+float read_temperature(temp_sensor_type_t); // Returns temperature in Celsius
 
 // Sensor calibration
 void calibrate_heart_rate_sensor(void);
 void calibrate_temperature_sensor(void);
 
 // Sensor status
-bool is_heart_rate_sensor_ready(void);
-bool is_temperature_sensor_ready(void);
+bool is_hr_sensor_ready(void);
+bool are_temp_sensors_ready(void);
 
 #endif // SENSORS_H
