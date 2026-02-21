@@ -41,9 +41,9 @@ LOG_MODULE_REGISTER(max30102, LOG_LEVEL_INF);
 #define REG_DIE_TEMP_INT    0x40
 #define REG_DIE_TEMP_FRAC   0x41
 #define REG_DIE_TEMP_CONFIG 0x42
-/* Part ID */
+/* ID */
 #define REG_REV_ID          0xFE
-#define REG_PART_ID         0xFF
+#define REG_DEVICE_ID         0xFF
 /* Interrupt Bits */
 #define INT_A_FULL          (1 << 7)  // FIFO almost full
 #define INT_PPG_RDY         (1 << 6)  // New sample ready
@@ -106,10 +106,10 @@ int max30102_init(void) {
         return -ENODEV;}
 
     // Check if there is connection
-    uint8_t part_id, rev_id; // part id, revision id
+    uint8_t device_id, rev_id; // part id, revision id
     
-    // read part id
-    int ret = max30102_read_reg(REG_PART_ID, &part_id);
+    // Read part id
+    int ret = max30102_read_reg(REG_DEVICE_ID, &device_id);
     if (ret != 0) {
         LOG_ERR("Failed to read Part ID: %d", ret);
         return ret;
@@ -122,9 +122,9 @@ int max30102_init(void) {
         return ret;
     }
 
-    LOG_INF("MAX30102 detected. Part ID: 0x%02x, Rev ID: 0x%02x", part_id, rev_id);
+    LOG_INF("MAX30102 detected. Part ID: 0x%02x, Rev ID: 0x%02x", device_id, rev_id);
 
-    if (part_id != 0x15) LOG_WRN("Unexpected Part ID. Expected 0x15, got 0x%02x", part_id);
+    if (device_id != 0x15) LOG_WRN("Unexpected Part ID. Expected 0x15, got 0x%02x", device_id);
 
     // Reset the device
     ret = max30102_write_reg(REG_SYSTEM_CONTROL, SYSTEM_RESET);

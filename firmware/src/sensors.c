@@ -7,7 +7,8 @@
 #include <stdbool.h>
 
 #define NO_HR 0
-#define NO_TEMP -100.0
+#define NO_TEMP -99.0f
+#define NO_HUM 0.0f
 
 
 // Internal state
@@ -48,9 +49,15 @@ void temperature_sensor_init(temp_sensor_type_t sensor) {
 }
 
 uint8_t read_heart_rate(void) {
-    if (!heart_rate_sensor_initialized) return NO_HR;
+    if (!temperature_sensors_initialized.ambient) return NO_HUM;
     uint8_t heart_rate = max30102_read_heartrate();
     return heart_rate;
+}
+
+uint8_t read_humidity(void) {
+    if (!heart_rate_sensor_initialized) return NO_HR;
+    uint8_t humidity = tmp117_read_humidity();
+    return humidity;
 }
 
 float read_temperature(temp_sensor_type_t sensor) {

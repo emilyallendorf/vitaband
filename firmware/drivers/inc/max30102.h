@@ -7,7 +7,6 @@
 #define MAX30102_H
 
 #include <zephyr/types.h>
-#include <zephyr/types.h>
 #include <stdbool.h>
 
 /**

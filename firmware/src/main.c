@@ -19,6 +19,7 @@
 #include <zephyr/bluetooth/services/hrs.h>
 
 #include <sensors.h>
+#include <state_manager.h>
 
 static bool hrf_ntf_enabled;
 
@@ -208,7 +209,9 @@ int main(void)
 	heart_rate_sensor_calibrate();
 	temperature_sensor_calibrate(BODY);
 	temperature_sensor_calibrate(AMBIENT);
+	vitaband_state_t state = OK;
 	bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
+
 
 #if !defined(CONFIG_BT_EXT_ADV)
 	printk("Starting Legacy Advertising (connectable and scannable)\n");
@@ -271,6 +274,7 @@ int main(void)
 #endif /* HAS_LED */
 
 	/* Implement notification. */
+
 	while (1) {
 		k_sleep(K_SECONDS(1));
 
@@ -278,8 +282,16 @@ int main(void)
 		uint8_t hr = read_heart_rate();
 		float body_temp = read_temperature(BODY);
 		float ambient_temp = read_temperature(AMBIENT);
-		device_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
+		vitaband_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
 		hrs_notify();
+
+		float temperature = tmp117_read_temperature_float();
+		uint8_t heart_rate = max30102_read_heartrate();
+		uint8_t risk = calculate_risk_score(hr, body_temp, ambient_temp);
+		// TODO: timer logic to see if it has been long enough to change states
+		
+		if (has_been_long_enough) state = determine_state(risk);
+		execute_state_action(state);
 
 		/* Battery level simulation */
 		bas_notify();
