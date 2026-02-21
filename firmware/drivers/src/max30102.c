@@ -6,6 +6,7 @@
 
 LOG_MODULE_REGISTER(max30102, LOG_LEVEL_INF);
 
+// TODO: check all of the register defines against the datasheet
 /* ========================== REGISTER DEFINITIONS ========================== */
 /* Status Registers */
 #define REG_INT_STATUS_1    0x00
@@ -71,9 +72,10 @@ LOG_MODULE_REGISTER(max30102, LOG_LEVEL_INF);
 
 
 /* ========================== CONSTANTS & BUFFERS =========================== */
-#define MAX_FIFO_SAMPLES    112       // 128 - 16
+#define MAX_FIFO_SAMPLES    112 // 128 - 16
 #define SAMPLES_PER_READ    32   
-#define BYTES_PER_SAMPLE    3         // 19-bit data
+#define BYTES_PER_SAMPLE    3   // 19-bit data
+#define LED_CHANNELS        2   // red & ir
 
 static uint8_t raw_buffer[SAMPLES_PER_READ * BYTES_PER_SAMPLE];
 static int32_t red_samples[SAMPLES_PER_READ];
@@ -223,7 +225,7 @@ void max30102_enter_normal_mode(void) {
 
     // Exit shutdown mode
     max30102_write_reg(REG_SYSTEM_CONTROL, 0x00);
-    LOG_INF("Entered normal mode - starting data acquisition");
+    LOG_INF("Entered normal mode - starting data collection");
 }
 
 void max30102_enter_proximity_detection_mode(void) {
@@ -246,29 +248,138 @@ bool max30102_check_proximity(void) {
     return false;
 }
 
-void device_data_read(void) {
-    uint8_t reg_addr = REG_FIFO_DATA;
-    uint8_t sample_count;
 
-    /* 1. Find out how many samples are waiting */
-    // TODO: You'd read the FIFO_SAMPLES_COUNT register here (often 0x04 or 0x06)
-    // For this example, let's assume sample_count is provided or read first.
+/* ============================ DATA COLLECTION ============================= */
+
+int max30102_read_fifo(uint8_t *sample_count, int32_t *red_out, int32_t *ir_out) {
+    // Find out how many samples are waiting
+    uint8_t fifo_count;
+    uint8_t samples_to_read;
+    int ret = max30102_read_fifo_count(&fifo_count);
+    if (ret != 0) {
+        LOG_ERR("Failed to read FIFO count: %d", ret);
+        return ret;
+    }
+    if (fifo_count == 0) {
+        *sample_count = 0;
+        return 0; // no data 
+    }
+    samples_to_read = (fifo_count > SAMPLES_PER_READ) ? SAMPLES_PER_READ : fifo_count;
 
     // read FIFO data over i2c
-    int rtrn = i2c_write_read_dt(&i2c_dev, &reg_addr, 1, raw_buffer, sample_count * 3);
-    if (rtrn != 0) {
-        LOG_ERR("FIFO Read Failed: %d", rtrn);
-        return;}
+    uint8_t reg_addr = REG_FIFO_DATA;
+    uint32_t bytes_to_read = samples_to_read * LED_CHANNELS * BYTES_PER_SAMPLE; 
+    ret = i2c_write_read_dt(&i2c_dev, &reg_addr, 1, raw_buffer, bytes_to_read);
+    if (ret != 0) {
+        LOG_ERR("FIFO Read Failed: %d", ret);
+        return;
+    }
 
-    // TODO: parse the data
+    // Parse the data: based on psuedo code provided in the datasheet
+    // MAX30102 FIFO format: [Red_MSB][Red_MID][Red_LSB][IR_MSB][IR_MID][IR_LSB]...
+    for (int i = 0; i < samples_to_read; i++) {
+        // Red channel (first 3 bytes)
+        int32_t red_val = ((int32_t)raw_buffer[i*6 + 0] << 16) |
+                          ((int32_t)raw_buffer[i*6 + 1] << 8) |
+                          ((int32_t)raw_buffer[i*6 + 2]);
+        red_val &= 0x3FFFF; // 18-bit data
+        red_samples[i] = red_val;
+        // IR channel (next 3 bytes)
+        int32_t ir_val = ((int32_t)raw_buffer[i*6 + 3] << 16) |
+                         ((int32_t)raw_buffer[i*6 + 4] << 8) |
+                         ((int32_t)raw_buffer[i*6 + 5]);
+        ir_val &= 0x3FFFF; // 18-bit data
+        ir_samples[i] = ir_val;
+    }
 
+    // Copy data to output buffers and count pointer
+    if (red_out != NULL) memcpy(red_out, red_samples, samples_to_read * sizeof(int32_t));
+    if (ir_out != NULL) memcpy(ir_out, ir_samples, samples_to_read * sizeof(int32_t));
+    *sample_count = samples_to_read;
+    LOG_DBG("Read %d samples from FIFO", samples_to_read);
+    return 0;
 }
 
+/* ======================== HEART RATE CALCULATION ========================== */
 
-uint8_t max30102_read_heartrate(void) {
-    // TODO: read a value from the sensor
+#define MIN_HEART_RATE  40
+#define MAX_HEART_RATE  220
+#define SAMPLE_RATE     100  // Hz (from PPG config)
 
-    // placeholder
-    uint8_t reading = 75;
-    return reading;
+static int32_t last_peak_value = 0;
+static uint32_t last_peak_time = 0;
+static uint8_t calculated_hr = 0;
+
+uint8_t max30102_calculate_heartrate(int32_t *ir_samples, uint8_t num_samples)
+{
+    static int32_t baseline = 0;
+    static bool baseline_initialized = false;
+    int32_t threshold;
+    uint32_t current_time = k_uptime_get_32();
+
+    if (num_samples == 0) return calculated_hr; // last known value
+
+    // Initialize baseline on first run
+    if (!baseline_initialized) {
+        int64_t sum = 0;
+        for (int i = 0; i < num_samples; i++) {
+            sum += ir_samples[i];
+        }
+        baseline = sum / num_samples;
+        baseline_initialized = true;
+        return 0;
+    }
+
+    // Update baseline (slow moving average)
+    int64_t sum = 0;
+    for (int i = 0; i < num_samples; i++) {
+        sum += ir_samples[i];
+    }
+    int32_t current_avg = sum / num_samples;
+    baseline = (baseline * 95 + current_avg * 5) / 100; // Slow adaptation
+    threshold = baseline + (baseline / 10); // 10% above baseline
+
+    // Peak detection
+    for (int i = 1; i < num_samples - 1; i++) {
+        // Check if this is a peak (higher than neighbors and above threshold)
+        if (ir_samples[i] > ir_samples[i-1] &&
+            ir_samples[i] > ir_samples[i+1] &&
+            ir_samples[i] > threshold) {
+            // Calculate time since last peak
+            if (last_peak_time > 0) {
+                uint32_t time_diff = current_time - last_peak_time;
+                if (time_diff > 0) {
+                    // Calculate HR in BPM
+                    uint32_t hr = (60000 / time_diff); // Convert ms to BPM
+                    // Validate range
+                    if (hr >= MIN_HEART_RATE && hr <= MAX_HEART_RATE) {
+                        calculated_hr = (uint8_t)hr;
+                        LOG_DBG("Heart rate: %d BPM (interval: %d ms)", 
+                                calculated_hr, time_diff);
+                    }
+                }
+            }
+            
+            last_peak_value = ir_samples[i];
+            last_peak_time = current_time;
+        }
+    }
+    return calculated_hr;
+}
+
+/* ============================== PUBLIC API ================================ */
+
+uint8_t max30102_read_heartrate(void)
+{
+    uint8_t sample_count;
+    int32_t red[SAMPLES_PER_READ];
+    int32_t ir[SAMPLES_PER_READ];
+    int ret;
+
+    // Read samples from FIFO */
+    ret = max30102_read_fifo(&sample_count, red, ir);
+    if (ret != 0 || sample_count == 0) return calculated_hr; // last known value
+
+    // Calculate heart rate from IR channel
+    return max30102_calculate_heartrate(ir, sample_count);
 }
