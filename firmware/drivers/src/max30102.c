@@ -369,8 +369,7 @@ uint8_t max30102_calculate_heartrate(int32_t *ir_samples, uint8_t num_samples)
 
 /* ============================== PUBLIC API ================================ */
 
-uint8_t max30102_read_heartrate(void)
-{
+uint8_t max30102_read_heartrate(void) {
     uint8_t sample_count;
     int32_t red[SAMPLES_PER_READ];
     int32_t ir[SAMPLES_PER_READ];
