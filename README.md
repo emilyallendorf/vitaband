@@ -1,10 +1,10 @@
-# ⌚ Vitaband: Wearable Heat-Stroke Detection
+# Vitaband: Wearable Heat-Stroke Detection
 
 **Vitaband** is an open-source, high-precision wearable designed to warn and prevent against heat stroke, in intense environmental working conditions. Built on the **nRF52840** (ARM Cortex-M4) and **Zephyr RTOS**, it provides a robust platform for real-time biometrics.
 
 ---
 
-## 🏗 System Architecture
+## System Architecture
 
 The project is divided into three main pillars: Hardware (PCB/Mechanical), Firmware (Zephyr/C), and Data Visualization (Mobile/Web).
 
@@ -18,7 +18,7 @@ Vitaband utilizes a specialized trio of sensors to ensure data accuracy:
 
 ---
 
-## 💎 Hardware Design
+## Hardware Design
 
 The hardware is optimized for a small form factor, prioritizing signal integrity for the sensitive analog fronts of the optical sensors.
 
@@ -34,7 +34,7 @@ The enclosure is 3D-printed using skin-safe TPU and Resin. A light-tight seal is
 
 ---
 
-## 🔋 Power Management & Proximity
+## Power Management & Proximity
 
 One of Vitaband's core innovations is its **Dynamic Power Scaling**. Using the MAX86141's optical proximity function, the device stays in a "Low Power" state (~8sps) until it detects contact with the skin.
 
@@ -45,7 +45,7 @@ One of Vitaband's core innovations is its **Dynamic Power Scaling**. Using the M
 
 ---
 
-## 📱 Software & Connectivity
+## Software & Connectivity
 
 The firmware broadcasts data over **Bluetooth 5.2 Low Energy** using standard and custom GATT services.
 
