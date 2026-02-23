@@ -5,7 +5,27 @@
 
 LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_INF);
 
-uint8_t calculate_risk_score(float skin_temp, uint8_t heart_rate) {
+uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, 
+uint8_t heart_rate, uint8_t base_heart_rate) {
+    if (base_heart_rate == 0) return 0;
+    if (base_skin_temp <= 0.0f) return 0;
+    
+    //psi calculation logic
+    float st = skin_temp;
+    float st_0 = base_skin_temp;
+    float hr= (float) heart_rate;
+    float hr_0 = (float) base_heart_rate;
+
+    float st_denominator = 39.5f-st_0;
+    if(st_denominator <= 0.1f) st_denominator = 0.1f;
+    float hr_denominator = 180.0f-st_0;
+    if(hr_denominator <= 1.0f) hr_denominator = 01.0f;
+
+    
+
+    
+
+    
     uint8_t score = rand(10);
     return score;
 }
