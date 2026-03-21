@@ -217,7 +217,7 @@
 &pinctrl {
     pwm0_default: pwm0_default {
         group1 {
-            /* TODO: Ask partner which pins for PWM */
+            /* TODO: Ask sharia which pins for PWM */
             /* Example: P0.07 for vibration, P0.08 for buzzer */
             psels = <NRF_PSEL(PWM_OUT0, 0, 7)>,   /* Vibration motor */
                     <NRF_PSEL(PWM_OUT1, 0, 8)>;   /* Buzzer */
