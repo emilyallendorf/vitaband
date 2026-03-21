@@ -1,0 +1,431 @@
+/*
+ * Firmware Test Harness
+ * Tests state machine, power management, and haptics with mock sensors
+ */
+
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/shell/shell.h>
+#include "mock_sensors.h"
+#include "state_manager.h"
+#include "power.h"
+#include "haptics.h"
+
+LOG_MODULE_REGISTER(test_harness, LOG_LEVEL_INF);
+
+/* ========================================================================== */
+/* TEST STATE                                                                 */
+/* ========================================================================== */
+
+static bool test_running = false;
+static device_state_t current_state = STATE_OK;
+static device_state_t previous_state = STATE_OK;
+
+/* Statistics */
+static struct {
+    uint32_t state_ok_count;
+    uint32_t state_warning_count;
+    uint32_t state_emergency_count;
+    uint32_t total_transitions;
+    uint32_t last_transition_time;
+} test_stats = {0};
+
+/* ========================================================================== */
+/* TEST LOOP                                                                  */
+/* ========================================================================== */
+
+static void test_loop_thread(void *arg1, void *arg2, void *arg3)
+{
+    ARG_UNUSED(arg1);
+    ARG_UNUSED(arg2);
+    ARG_UNUSED(arg3);
+    
+    LOG_INF("=== Test Harness Started ===");
+    
+    while (test_running) {
+        /* Update scenario if active */
+        mock_sensors_update_scenario();
+        
+        /* Read mock sensors */
+        uint8_t hr = mock_read_heart_rate();
+        float temp = mock_read_temperature();
+        uint16_t battery_mv = mock_read_battery_voltage();
+        
+        /* Calculate battery percentage (for logging) */
+        uint8_t battery_pct = 0;
+        if (battery_mv >= 4200) battery_pct = 100;
+        else if (battery_mv >= 3000) {
+            battery_pct = ((battery_mv - 3000) * 100) / 1200;
+        }
+        
+        /* Evaluate device state */
+        current_state = evaluate_device_state(hr, temp);
+        
+        /* Check for state transition */
+        if (current_state != previous_state) {
+            test_stats.total_transitions++;
+            test_stats.last_transition_time = k_uptime_get_32();
+            
+            LOG_WRN("=== STATE TRANSITION: %s -> %s ===",
+                    get_state_string(previous_state),
+                    get_state_string(current_state));
+            LOG_INF("Vitals: HR=%u BPM, Temp=%.1f°C, Battery=%u%%",
+                    hr, temp, battery_pct);
+            
+            /* Trigger haptic alert */
+            haptics_trigger_alert(current_state);
+            
+            /* Call state transition handler */
+            handle_state_transition(previous_state, current_state);
+            
+            previous_state = current_state;
+        }
+        
+        /* Update statistics */
+        switch (current_state) {
+            case STATE_OK:
+                test_stats.state_ok_count++;
+                break;
+            case STATE_WARNING:
+                test_stats.state_warning_count++;
+                break;
+            case STATE_EMERGENCY:
+                test_stats.state_emergency_count++;
+                break;
+        }
+        
+        /* Log current status every 5 seconds */
+        static uint32_t last_log_time = 0;
+        uint32_t now = k_uptime_get_32();
+        if ((now - last_log_time) >= 5000) {
+            LOG_INF("Status: %s | HR=%u | Temp=%.1f | Batt=%u%% (%umV)",
+                    get_state_string(current_state),
+                    hr, temp, battery_pct, battery_mv);
+            last_log_time = now;
+        }
+        
+        /* Sleep */
+        k_msleep(1000);  /* 1 Hz update rate */
+    }
+    
+    LOG_INF("=== Test Harness Stopped ===");
+}
+
+K_THREAD_DEFINE(test_thread, 2048, test_loop_thread, NULL, NULL, NULL, 7, 0, 0);
+
+/* ========================================================================== */
+/* TEST CONTROL                                                               */
+/* ========================================================================== */
+
+void test_harness_start(void)
+{
+    if (test_running) {
+        LOG_WRN("Test already running");
+        return;
+    }
+    
+    LOG_INF("Starting test harness");
+    
+    /* Initialize mock sensors */
+    mock_sensors_init();
+    
+    /* Initialize state manager */
+    state_manager_init();
+    
+    /* Initialize haptics */
+    haptics_init();
+    
+    /* Start test thread */
+    test_running = true;
+    k_thread_start(test_thread);
+}
+
+void test_harness_stop(void)
+{
+    if (!test_running) {
+        LOG_WRN("Test not running");
+        return;
+    }
+    
+    LOG_INF("Stopping test harness");
+    test_running = false;
+    
+    /* Stop all haptics */
+    haptics_stop_all();
+}
+
+void test_harness_print_stats(void)
+{
+    uint32_t total_samples = test_stats.state_ok_count +
+                             test_stats.state_warning_count +
+                             test_stats.state_emergency_count;
+    
+    LOG_INF("=== Test Statistics ===");
+    LOG_INF("Total samples: %u", total_samples);
+    LOG_INF("State OK: %u (%.1f%%)",
+            test_stats.state_ok_count,
+            total_samples > 0 ? (test_stats.state_ok_count * 100.0f / total_samples) : 0);
+    LOG_INF("State WARNING: %u (%.1f%%)",
+            test_stats.state_warning_count,
+            total_samples > 0 ? (test_stats.state_warning_count * 100.0f / total_samples) : 0);
+    LOG_INF("State EMERGENCY: %u (%.1f%%)",
+            test_stats.state_emergency_count,
+            total_samples > 0 ? (test_stats.state_emergency_count * 100.0f / total_samples) : 0);
+    LOG_INF("Total transitions: %u", test_stats.total_transitions);
+    
+    if (test_stats.last_transition_time > 0) {
+        uint32_t time_since_transition = (k_uptime_get_32() - test_stats.last_transition_time) / 1000;
+        LOG_INF("Last transition: %u seconds ago", time_since_transition);
+    }
+    
+    LOG_INF("Current state: %s", get_state_string(current_state));
+}
+
+void test_harness_reset_stats(void)
+{
+    memset(&test_stats, 0, sizeof(test_stats));
+    LOG_INF("Statistics reset");
+}
+
+/* ========================================================================== */
+/* SHELL COMMANDS                                                             */
+/* ========================================================================== */
+
+static int cmd_test_start(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    
+    test_harness_start();
+    shell_print(sh, "Test harness started");
+    return 0;
+}
+
+static int cmd_test_stop(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    
+    test_harness_stop();
+    shell_print(sh, "Test harness stopped");
+    return 0;
+}
+
+static int cmd_test_stats(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    
+    test_harness_print_stats();
+    return 0;
+}
+
+static int cmd_test_reset(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    
+    test_harness_reset_stats();
+    shell_print(sh, "Statistics reset");
+    return 0;
+}
+
+/* Mock sensor commands */
+static int cmd_mock_hr(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_error(sh, "Usage: mock hr <bpm>");
+        return -EINVAL;
+    }
+    
+    int hr = atoi(argv[1]);
+    if (hr < 0 || hr > 255) {
+        shell_error(sh, "HR must be 0-255");
+        return -EINVAL;
+    }
+    
+    mock_sensors_set_heart_rate(hr);
+    shell_print(sh, "Heart rate set to %d BPM", hr);
+    return 0;
+}
+
+static int cmd_mock_temp(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_error(sh, "Usage: mock temp <celsius>");
+        return -EINVAL;
+    }
+    
+    float temp = atof(argv[1]);
+    if (temp < 30.0f || temp > 45.0f) {
+        shell_error(sh, "Temperature must be 30.0-45.0");
+        return -EINVAL;
+    }
+    
+    mock_sensors_set_temperature(temp);
+    shell_print(sh, "Temperature set to %.1f°C", temp);
+    return 0;
+}
+
+static int cmd_mock_battery(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_error(sh, "Usage: mock battery <mv>");
+        return -EINVAL;
+    }
+    
+    int voltage = atoi(argv[1]);
+    if (voltage < 2500 || voltage > 4500) {
+        shell_error(sh, "Battery must be 2500-4500 mV");
+        return -EINVAL;
+    }
+    
+    mock_sensors_set_battery(voltage);
+    shell_print(sh, "Battery set to %d mV", voltage);
+    return 0;
+}
+
+static int cmd_mock_mode(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_error(sh, "Usage: mock mode <static|random|sine>");
+        return -EINVAL;
+    }
+    
+    mock_mode_t mode;
+    if (strcmp(argv[1], "static") == 0) {
+        mode = MOCK_MODE_STATIC;
+    } else if (strcmp(argv[1], "random") == 0) {
+        mode = MOCK_MODE_RANDOM;
+    } else if (strcmp(argv[1], "sine") == 0) {
+        mode = MOCK_MODE_SINE_WAVE;
+    } else {
+        shell_error(sh, "Unknown mode. Use: static, random, or sine");
+        return -EINVAL;
+    }
+    
+    mock_sensors_set_mode(mode);
+    shell_print(sh, "Mock mode set to %s", argv[1]);
+    return 0;
+}
+
+static int cmd_mock_noise(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 3) {
+        shell_error(sh, "Usage: mock noise <on|off> <amplitude>");
+        return -EINVAL;
+    }
+    
+    bool enable = (strcmp(argv[1], "on") == 0);
+    int amplitude = atoi(argv[2]);
+    
+    if (amplitude < 0 || amplitude > 50) {
+        shell_error(sh, "Amplitude must be 0-50");
+        return -EINVAL;
+    }
+    
+    mock_sensors_enable_noise(enable, amplitude);
+    shell_print(sh, "Noise %s (amplitude: %d)", enable ? "enabled" : "disabled", amplitude);
+    return 0;
+}
+
+static int cmd_scenario(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: scenario <name|stop|list>");
+        return -EINVAL;
+    }
+    
+    if (strcmp(argv[1], "stop") == 0) {
+        mock_sensors_stop_scenario();
+        shell_print(sh, "Scenario stopped");
+        return 0;
+    }
+    
+    if (strcmp(argv[1], "list") == 0) {
+        shell_print(sh, "Available scenarios:");
+        shell_print(sh, "  normal      - Normal day (all OK)");
+        shell_print(sh, "  exercise    - Exercise session");
+        shell_print(sh, "  fever       - Fever development");
+        shell_print(sh, "  tachycardia - Heart rate spike");
+        shell_print(sh, "  battery     - Battery drain");
+        shell_print(sh, "  emergency   - Multi-parameter emergency");
+        return 0;
+    }
+    
+    /* Map name to scenario */
+    mock_scenario_t scenario;
+    if (strcmp(argv[1], "normal") == 0) {
+        scenario = SCENARIO_NORMAL;
+    } else if (strcmp(argv[1], "exercise") == 0) {
+        scenario = SCENARIO_EXERCISE;
+    } else if (strcmp(argv[1], "fever") == 0) {
+        scenario = SCENARIO_FEVER;
+    } else if (strcmp(argv[1], "tachycardia") == 0) {
+        scenario = SCENARIO_TACHYCARDIA;
+    } else if (strcmp(argv[1], "battery") == 0) {
+        scenario = SCENARIO_BATTERY_DRAIN;
+    } else if (strcmp(argv[1], "emergency") == 0) {
+        scenario = SCENARIO_EMERGENCY;
+    } else {
+        shell_error(sh, "Unknown scenario. Use 'scenario list' to see options");
+        return -EINVAL;
+    }
+    
+    mock_sensors_start_scenario(scenario);
+    shell_print(sh, "Started scenario: %s", mock_sensors_get_scenario_name(scenario));
+    return 0;
+}
+
+/* Haptics test commands */
+static int cmd_haptics_test(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    
+    shell_print(sh, "Running haptics test sequence...");
+    haptics_test_all();
+    return 0;
+}
+
+static int cmd_haptics_led(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_error(sh, "Usage: haptics led <on|off>");
+        return -EINVAL;
+    }
+    
+    bool on = (strcmp(argv[1], "on") == 0);
+    haptics_led_set(on);
+    shell_print(sh, "LED %s", on ? "ON" : "OFF");
+    return 0;
+}
+
+/* Register shell commands */
+SHELL_STATIC_SUBCMD_SET_CREATE(test_cmds,
+    SHELL_CMD(start, NULL, "Start test harness", cmd_test_start),
+    SHELL_CMD(stop, NULL, "Stop test harness", cmd_test_stop),
+    SHELL_CMD(stats, NULL, "Show statistics", cmd_test_stats),
+    SHELL_CMD(reset, NULL, "Reset statistics", cmd_test_reset),
+    SHELL_SUBCMD_SET_END
+);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(mock_cmds,
+    SHELL_CMD(hr, NULL, "Set heart rate <bpm>", cmd_mock_hr),
+    SHELL_CMD(temp, NULL, "Set temperature <celsius>", cmd_mock_temp),
+    SHELL_CMD(battery, NULL, "Set battery <mv>", cmd_mock_battery),
+    SHELL_CMD(mode, NULL, "Set mode <static|random|sine>", cmd_mock_mode),
+    SHELL_CMD(noise, NULL, "Set noise <on|off> <amplitude>", cmd_mock_noise),
+    SHELL_SUBCMD_SET_END
+);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(haptics_cmds,
+    SHELL_CMD(test, NULL, "Test all haptics", cmd_haptics_test),
+    SHELL_CMD(led, NULL, "Control LED <on|off>", cmd_haptics_led),
+    SHELL_SUBCMD_SET_END
+);
+
+SHELL_CMD_REGISTER(test, &test_cmds, "Test harness commands", NULL);
+SHELL_CMD_REGISTER(mock, &mock_cmds, "Mock sensor commands", NULL);
+SHELL_CMD_REGISTER(scenario, NULL, "Scenario commands", cmd_scenario);
+SHELL_CMD_REGISTER(haptics, &haptics_cmds, "Haptics test commands", NULL);
