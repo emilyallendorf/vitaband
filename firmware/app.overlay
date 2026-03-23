@@ -68,7 +68,7 @@
         compatible = "gpio-leds";
         
         led0: led_0 {
-            /* TODO: Ask partner which GPIO pin is used for LED */
+            /* TODO: Ask sharia which GPIO pin is used for LED */
             /* Example: P0.06 */
             gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
             label = "Alert LED";
@@ -84,7 +84,7 @@
         
         vibration_motor: vibration_motor {
             /* PWM channel 0 for vibration motor */
-            /* TODO: Ask partner which pin */
+            /* TODO: Ask sharia which pin */
             /* Example: P0.07 on PWM0 channel 0 */
             pwms = <&pwm0 0 PWM_USEC(1000) PWM_POLARITY_NORMAL>;
             label = "Vibration Motor";
@@ -92,7 +92,7 @@
         
         buzzer: buzzer {
             /* PWM channel 1 for buzzer */
-            /* TODO: Ask partner which pin */
+            /* TODO: Ask sharia which pin */
             /* Example: P0.08 on PWM0 channel 1 */
             pwms = <&pwm0 1 PWM_USEC(250) PWM_POLARITY_NORMAL>;
             label = "Piezo Buzzer";
@@ -138,7 +138,7 @@
 &pinctrl {
     i2c0_default: i2c0_default {
         group1 {
-            /* TODO: Ask partner which pins for I2C */
+            /* TODO: Ask sharia which pins for I2C */
             /* Common: P0.26 = SCL, P0.27 = SDA */
             psels = <NRF_PSEL(TWIM_SDA, 0, 27)>,
                     <NRF_PSEL(TWIM_SCL, 0, 26)>;
@@ -202,7 +202,7 @@
         zephyr,reference = "ADC_REF_INTERNAL";
         zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
         
-        /* TODO: Ask partner which ADC pin */
+        /* TODO: Ask sharia which ADC pin */
         /* Common: AIN1 = P0.03 */
         zephyr,input-positive = <NRF_SAADC_AIN1>;
         zephyr,resolution = <12>;
