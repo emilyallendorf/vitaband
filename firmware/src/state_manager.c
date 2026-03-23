@@ -48,20 +48,104 @@ uint8_t heart_rate, uint8_t base_heart_rate) {
     return (uint8_t) (psi + 0.5f);
 }
 
-vitaband_state_t determine_state(uint8_t risk_score) {
-    // Mapping the 1-10 scale to our 4 levels
-    switch (risk_score) {
-        case 1 ... 3:
-            return OK;
-        case 4 ... 6:
-            return WARNING;
-        case 7 ... 8:
-            return CRITICAL;
-        case 9 ... 10:
-            return EMERGENCY;
-        default:
-            return OK;
+vitaband_state_t determine_state(vitaband_state_t curr_state, float psi,
+bool emergency_button_pressed, bool emergency_button_long) {
+    static int64_t ge3_start_ms  = -1;   // PSI >= 3.0
+    static int64_t ge7_start_ms  = -1;   // PSI >= 7.0
+    static int64_t le65_start_ms = -1;   // PSI <= 6.5
+    static int64_t le25_start_ms = -1;   // PSI <= 2.5
+
+    int64_t now = k_uptime_get();
+    vitaband_state_t next_state = curr_state;
+    if (curr_state!=EMERGENCY && emergency_button_pressed==true)
+    {
+        LOG_INF("State change: %d -> %d (emergency button pressed)",
+        current_state, EMERGENCY);
+        ge3_start_ms  = -1;
+        ge7_start_ms  = -1;
+        le65_start_ms = -1;
+        le25_start_ms = -1;
+        return EMERGENCY;
     }
+    if (curr_state==EMERGENCY)
+    {
+        if (emergency_long_press)
+        {
+            LOG_INF("State change: %d -> %d (emergency button long-pressed)",
+            EMERGENCY, WARNING);
+            ge3_start_ms  = -1;
+            ge7_start_ms  = -1;
+            le65_start_ms = -1;
+            le25_start_ms = -1;
+            return WARNING;
+        }
+        return EMERGENCY;
+    }
+    if (psi >= 3.0f) {
+        if (ge3_start_ms < 0) {
+            ge3_start_ms = now;
+        }
+    } else {
+        ge3_start_ms = -1;
+    }
+
+    if (psi >= 7.0f) {
+        if (ge7_start_ms < 0) {
+            ge7_start_ms = now;
+        }
+    } else {
+        ge7_start_ms = -1;
+    }
+
+    if (psi <= 6.5f) {
+        if (le65_start_ms < 0) {
+            le65_start_ms = now;
+        }
+    } else {
+        le65_start_ms = -1;
+    }
+    if (psi <= 2.5f) {
+        if (le25_start_ms < 0) {
+            le25_start_ms = now;
+        }
+    } else {
+        le25_start_ms = -1;
+    }
+    switch (current_state) {
+    case OK:
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
+            next_state = CRITICAL;
+        } else if (ge3_start_ms >= 0 && (now - ge3_start_ms) >= 30000) {
+            next_state = WARNING;
+        }
+        break;
+
+    case WARNING:
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
+            next_state = CRITICAL;
+        } else if (le25_start_ms >= 0 && (now - le25_start_ms) >= 30000) {
+            next_state = OK;
+        }
+        break;
+
+    case CRITICAL:
+        if (le65_start_ms >= 0 && (now - le65_start_ms) >= 15000) {
+            next_state = WARNING;
+        }
+        break;
+    default:
+        next_state=OK;
+        break;
+        
+    if (next_state != current_state) {
+        LOG_INF("State change: %d -> %d, psi=%.2f",
+                current_state, next_state, (double)psi);
+        ge3_start_ms  = -1;
+        ge7_start_ms  = -1;
+        le65_start_ms = -1;
+        le25_start_ms = -1;
+    }
+    return next_state;
 }
 
 void execute_state_actions(vitaband_state_t state) {
