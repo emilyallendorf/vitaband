@@ -9,8 +9,6 @@
 #include <zephyr/types.h>
 #include <stdbool.h>
 
-/* Helper macro for clamping values */
-#define CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
 
 /* ========================================================================== */
 /* MOCK MODES                                                                 */

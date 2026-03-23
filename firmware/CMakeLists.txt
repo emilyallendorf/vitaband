@@ -10,7 +10,15 @@ target_sources(app PRIVATE
     src/ble.c
     src/power.c
     src/sensors.c
-    drivers/src/max30102.c
+    src/haptics.c
+    src/mock_sensors.c
+    src/state_manager.c
+    src/test.c
+    drivers/src/tmp117.c
+    drivers/src/max86140.c
+    drivers/src/sht3x-dis.c
+    drivers/src/alarm.c
+    drivers/src/buzzer.c
 )
 
 target_include_directories(app PUBLIC 

@@ -3,7 +3,9 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/types.h>
 #include "tmp117.h"
+#include <zephyr/logging/log.h>
 
+LOG_MODULE_REGISTER(tmp117, LOG_LEVEL_INF);
 
 /* ========================== REGISTER DEFINITIONS ========================== */
 #define REG_TEMP_RESULT     0x00

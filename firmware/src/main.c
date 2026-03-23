@@ -21,6 +21,19 @@
 #include <sensors.h>
 #include <state_manager.h>
 
+#define CONFIG_USE_MOCK_SENSORS 1
+
+#ifdef CONFIG_USE_MOCK_SENSORS
+    #include "mock_sensors.h"
+    #define read_heart_rate() mock_read_heart_rate()
+    #define read_temperature() mock_read_temperature()
+#else
+    #include "max86140.h"
+    #include "tmp117.h"
+    #define read_heart_rate() max86140_read_heartrate()
+    #define read_temperature() tmp117_read_temperature()
+#endif
+
 static bool hrf_ntf_enabled;
 
 static const struct bt_data ad[] = {
@@ -112,7 +125,7 @@ static void bas_notify(void)
 
 static void hrs_notify(void)
 {
-	uint8_t heartrate = max30102_read_heartrate();
+	uint8_t heartrate = read_heart_rate();
 
 	if (hrf_ntf_enabled) {
 		bt_hrs_notify(heartrate);
@@ -206,11 +219,11 @@ int main(void)
 	heart_rate_sensor_init();
 	temperature_sensor_init(BODY);
 	temperature_sensor_init(AMBIENT);
-	heart_rate_sensor_calibrate();
-	temperature_sensor_calibrate(BODY);
-	temperature_sensor_calibrate(AMBIENT);
+	// heart_rate_sensor_calibrate();
+	// temperature_sensor_calibrate(BODY);
+	// temperature_sensor_calibrate(AMBIENT);
 	vitaband_state_t state = OK;
-	bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
+	// bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
 
 
 #if !defined(CONFIG_BT_EXT_ADV)
@@ -277,55 +290,60 @@ int main(void)
 
 	while (1) {
 		k_sleep(K_SECONDS(1));
-
-		/* sensor measurements simulation */
-		uint8_t hr = read_heart_rate();
-		float body_temp = read_temperature(BODY);
-		float ambient_temp = read_temperature(AMBIENT);
-		vitaband_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
-		hrs_notify();
-
-		float temperature = tmp117_read_temperature_float();
-		uint8_t heart_rate = max30102_read_heartrate();
-		uint8_t risk = calculate_risk_score(hr, body_temp, ambient_temp);
-		// TODO: timer logic to see if it has been long enough to change states
-		
-		if (has_been_long_enough) state = determine_state(risk);
-		execute_state_action(state);
-
-		/* Battery level simulation */
-		bas_notify();
-
-		if (atomic_test_and_clear_bit(state, STATE_CONNECTED)) {
-			/* Connected callback executed */
-
-#if defined(HAS_LED)
-			blink_stop();
-#endif /* HAS_LED */
-		} else if (atomic_test_and_clear_bit(state, STATE_DISCONNECTED)) {
-#if !defined(CONFIG_BT_EXT_ADV)
-			printk("Starting Legacy Advertising (connectable and scannable)\n");
-			err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd,
-					      ARRAY_SIZE(sd));
-			if (err) {
-				printk("Advertising failed to start (err %d)\n", err);
-				return 0;
-			}
-
-#else /* CONFIG_BT_EXT_ADV */
-			printk("Starting Extended Advertising (connectable and non-scannable)\n");
-			err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
-			if (err) {
-				printk("Failed to start extended advertising set (err %d)\n", err);
-				return 0;
-			}
-#endif /* CONFIG_BT_EXT_ADV */
-
-#if defined(HAS_LED)
-			blink_start();
-#endif /* HAS_LED */
-		}
 	}
 
-	return 0;
+
 }
+
+		// /* sensor measurements simulation */
+		// uint8_t hr = read_heart_rate();
+		// float body_temp = read_temperature(BODY);
+		// float ambient_temp = read_temperature(AMBIENT);
+		// vitaband_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
+		// hrs_notify();
+
+		// float temperature = tmp117_read_temperature_float();
+		// uint8_t heart_rate = max30102_read_heartrate();
+		// uint8_t risk = calculate_risk_score(hr, body_temp, ambient_temp);
+		// // TODO: timer logic to see if it has been long enough to change states
+		
+		// if (has_been_long_enough) state = determine_state(risk);
+		// execute_state_action(state);
+
+		// /* Battery level simulation */
+		// bas_notify();
+
+		// if (atomic_test_and_clear_bit(state, STATE_CONNECTED)) {
+		// 	/* Connected callback executed */
+
+// #if defined(HAS_LED)
+// 			blink_stop();
+// #endif /* HAS_LED */
+// // 		} else if (atomic_test_and_clear_bit(state, STATE_DISCONNECTED)) {
+// #if !defined(CONFIG_BT_EXT_ADV)
+// 			printk("Starting Legacy Advertising (connectable and scannable)\n");
+// 			err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd,
+// 					      ARRAY_SIZE(sd));
+// 			if (err) {
+// 				printk("Advertising failed to start (err %d)\n", err);
+// 				return 0;
+// 			}
+
+// #else /* CONFIG_BT_EXT_ADV */
+// 			printk("Starting Extended Advertising (connectable and non-scannable)\n");
+// 			err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
+// 			if (err) {
+// 				printk("Failed to start extended advertising set (err %d)\n", err);
+// 				return 0;
+// 			}
+// #endif /* CONFIG_BT_EXT_ADV */
+
+// #if defined(HAS_LED)
+// 			blink_start();
+// #endif /* HAS_LED */
+// 		}
+// 	}
+
+// 	return 0;
+
+

@@ -5,6 +5,9 @@
 #include "sensors.h"
 #include <errno.h>
 #include <stdbool.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(sensors, LOG_LEVEL_INF);
 
 #define NO_HR 0
 #define NO_TEMP -99.0f
@@ -24,7 +27,7 @@ temp_sensor_states_t temperature_sensors_calibrated = {
 };
 
 void heart_rate_sensor_init(void) {
-    int ret = max30102_init();
+    int ret = max86140_init();
     if (ret == 0) heart_rate_sensor_initialized = true;
 }
 
@@ -50,7 +53,7 @@ void temperature_sensor_init(temp_sensor_type_t sensor) {
 
 uint8_t read_heart_rate(void) {
     if (!temperature_sensors_initialized.ambient) return NO_HUM;
-    uint8_t heart_rate = max30102_read_heartrate();
+    uint8_t heart_rate = max86140_read_heartrate();
     return heart_rate;
 }
 

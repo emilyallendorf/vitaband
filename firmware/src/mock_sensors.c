@@ -8,8 +8,12 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/random/random.h>
 #include "mock_sensors.h"
+#include <math.h>
 
 LOG_MODULE_REGISTER(mock_sensors, LOG_LEVEL_INF);
+#ifndef CLAMP
+#define CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
+#endif
 
 /* ========================================================================== */
 /* MOCK SENSOR STATE                                                          */
