@@ -8,6 +8,7 @@
 
 #include <zephyr/types.h>
 #include <stdbool.h>
+#include <config.h>
 
 /* Include state manager for device_state_t */
 /* TODO: If you don't have state_manager.h yet, define states here: */

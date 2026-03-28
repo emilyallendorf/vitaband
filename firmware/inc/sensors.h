@@ -9,8 +9,9 @@
 #include <stdbool.h>
 #include "tmp117.h"
 #include "sht3x-dis.h"
-#include "max86140.h"
+// #include "max86140.h"
 #include <stdint.h>
+#include <config.h>
 
 
 typedef enum {

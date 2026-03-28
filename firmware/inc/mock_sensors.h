@@ -8,6 +8,7 @@
 
 #include <zephyr/types.h>
 #include <stdbool.h>
+#include <config.h>
 
 
 /* ========================================================================== */

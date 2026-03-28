@@ -16,8 +16,11 @@ static float clampf (float x, float lo, float hi)
     if (x>hi) return hi;
     return x;
 }
+
+
 void state_manager_init(void)
 {
+    
     int err;
 
     LOG_INF("Initializing State Manager...");
@@ -25,13 +28,23 @@ void state_manager_init(void)
     /* 1. Set default starting state */
     vitaband_state_t current_system_state = OK;
 
-    /* 2. Validate/Initialize Hardware Dependencies */
-    // Initialize Temperature/Humidity Sensor
-    err = sht3xdis_init();
-    if (err != 0) {
-        LOG_ERR("SHT3x Sensor failed to init (err %d)", err);
-        current_system_state = EMERGENCY;
-    }
+    #ifdef CONFIG_USE_MOCK_SENSORS
+        /* Logic for the MOCK case */
+        LOG_INF("Mock Mode: Skipping SHT3x hardware check.");
+        current_system_state = OK; 
+        return 0;
+    #else
+        /* 2. Validate/Initialize Hardware Dependencies */
+        // Initialize Temperature/Humidity Sensor
+        err = sht3xdis_init();
+        if (err != 0) {
+            LOG_ERR("SHT3x Sensor failed to init (err %d)", err);
+            current_system_state = EMERGENCY;
+        }
+        return 0;
+    #endif
+
+    
 
     // Initialize Heart Rate Sensor (Example call)
     // err = max86140_init(); 

@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <zephyr/logging/log.h>
 
+
 LOG_MODULE_REGISTER(sensors, LOG_LEVEL_INF);
 
 #define NO_HR 0
@@ -27,8 +28,9 @@ temp_sensor_states_t temperature_sensors_calibrated = {
 };
 
 void heart_rate_sensor_init(void) {
-    int ret = max86140_init();
-    if (ret == 0) heart_rate_sensor_initialized = true;
+    // int ret = max86140_init();
+    // if (ret == 0) heart_rate_sensor_initialized = true;
+    return true;
 }
 
 void temperature_sensor_init(temp_sensor_type_t sensor) {
@@ -53,13 +55,14 @@ void temperature_sensor_init(temp_sensor_type_t sensor) {
 
 uint8_t read_heart_rate(void) {
     if (!temperature_sensors_initialized.ambient) return NO_HUM;
-    uint8_t heart_rate = max86140_read_heartrate();
+    // uint8_t heart_rate = max86140_read_heartrate();
+    uint8_t heart_rate = 42;
     return heart_rate;
 }
 
 uint8_t read_humidity(void) {
     if (!heart_rate_sensor_initialized) return NO_HR;
-    uint8_t humidity = tmp117_read_humidity();
+    uint8_t humidity = sht3xdis_read_humidity();
     return humidity;
 }
 

@@ -2,6 +2,7 @@
 #define STATE_MANAGER_H
 
 #include <stdint.h>
+#include <config.h>
 
 typedef enum {
     OK,

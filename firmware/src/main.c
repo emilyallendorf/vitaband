@@ -20,11 +20,11 @@
 
 #include <sensors.h>
 #include <state_manager.h>
+#include <config.h>
 
-#define CONFIG_USE_MOCK_SENSORS 1
 
 #ifdef CONFIG_USE_MOCK_SENSORS
-    #include "mock_sensors.h"
+    #include "mock_sensors.h" 
     #define read_heart_rate() mock_read_heart_rate()
     #define read_temperature() mock_read_temperature()
 #else
@@ -60,7 +60,7 @@ enum {
 	STATE_BITS,
 };
 
-static ATOMIC_DEFINE(state, STATE_BITS);
+static ATOMIC_DEFINE(ble_state, STATE_BITS);
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -69,7 +69,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	} else {
 		printk("Connected\n");
 
-		(void)atomic_set_bit(state, STATE_CONNECTED);
+		(void)atomic_set_bit(ble_state, STATE_CONNECTED);
 	}
 }
 
@@ -77,7 +77,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("Disconnected, reason 0x%02x %s\n", reason, bt_hci_err_to_str(reason));
 
-	(void)atomic_set_bit(state, STATE_DISCONNECTED);
+	(void)atomic_set_bit(ble_state, STATE_DISCONNECTED);
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -288,11 +288,52 @@ int main(void)
 
 	/* Implement notification. */
 
-	while (1) {
-		k_sleep(K_SECONDS(1));
-	}
+    printk("Vitaband Shell Test Harness Ready.\n");
+    printk("Type 'help' in the terminal to see commands.\n");
 
+    while (1) {
 
+        /* 1. Get Sensor Readings */
+        // uint8_t heart_rate = read_heart_rate();
+        
+        // Note: I'm passing BODY to your mock function 
+        // Ensure mock_read_temperature(int type) handles this!
+        // float skin_temp = read_temperature(); 
+        // float ambient_temp = 22.0f; // Static mock for ambient
+
+        // /* 2. Evaluate State */
+        // // Using the function we wrote earlier
+		// uint8_t base_heart_rate = 120;
+		// // float base_skin_temp = 38
+		// uint8_t risk_score = calculate_risk_score(skin_temp, ambient_temp, heart_rate, base_heart_rate);
+        // vitaband_state_t new_state = determine_state(risk_score);
+
+        // /* 3. Handle Transitions & Actions */
+        // if (new_state != state) {
+        //     handle_state_transition(state, new_state);
+        //     state = new_state;
+        // }
+
+        // /* 4. Bluetooth Notifications */
+        // // This will now use the mock HR value
+        // hrs_notify();
+        // bas_notify();
+
+        // /* 5. Logging for your Test Bench */
+        // printk("[TEST] HR: %d bpm, Temp: %.2f C | State: %d\n", 
+        //         heart_rate, (double)skin_temp, state);
+
+        // /* 6. Check for Connection/Disconnection events */
+        // if (atomic_test_and_clear_bit(ble_state, STATE_CONNECTED)) {
+        //     printk("Event: Central device connected.\n");
+        //     #if defined(HAS_LED)
+        //     blink_stop(); // Stop blinking, stay solid on connection
+        //     #endif
+        // }
+
+        // Wait 2 seconds between "poll" cycles so the terminal is readable
+        k_sleep(K_MSEC(2000));
+    }
 }
 
 		// /* sensor measurements simulation */

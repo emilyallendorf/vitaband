@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <config.h>
 
 /**
  * @brief Initialize the SHT3x-DIS ambient sensor.
