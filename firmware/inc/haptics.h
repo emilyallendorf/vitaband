@@ -8,9 +8,10 @@
 
 #include <zephyr/types.h>
 #include <stdbool.h>
+#include <config.h>
 
 /* Include state manager for device_state_t */
-/* If you don't have state_manager.h yet, define states here: */
+/* TODO: If you don't have state_manager.h yet, define states here: */
 typedef enum {
     STATE_OK = 0,
     STATE_WARNING = 1,

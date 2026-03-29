@@ -15,6 +15,6 @@ int tmp117_init(void);
  * @brief Read the current temperature from the TMP117.
  * * @return Temperature value as uint8_t (or adjust to float/int16 for precision).
  */
-uint8_t tmp117_read_temperature(void);
+float tmp117_read_temperature(void);
 
 #endif /* TMP117_H */

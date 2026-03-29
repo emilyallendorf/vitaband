@@ -1,5 +1,9 @@
+#ifndef SHT3XDIS_H
+#define SHT3XDIS_H
+
 #include <stdint.h>
 #include <stdbool.h>
+#include <config.h>
 
 /**
  * @brief Initialize the SHT3x-DIS ambient sensor.
@@ -7,13 +11,13 @@
  * single-shot or periodic measurement mode.
  * * @return 0 on success, negative error code on failure.
  */
-int uint8_t sht3xdis_init(void);
+int sht3xdis_init(void);
 
 /**
  * @brief Read the ambient temperature.
  * * @return Temperature as uint8_t (or float/int16_t for high precision).
  */
-uint8_t sht3xdis_read_temperature(void);
+float sht3xdis_read_temperature(void);
 
 /**
  * @brief Read the ambient humidity.

@@ -7,10 +7,11 @@
 #define SENSORS_H
 
 #include <stdbool.h>
-#include "max30102.h"
 #include "tmp117.h"
 #include "sht3x-dis.h"
+// #include "max86140.h"
 #include <stdint.h>
+#include <config.h>
 
 
 typedef enum {
@@ -33,7 +34,7 @@ float read_temperature(temp_sensor_type_t); // Returns temperature in Celsius
 
 // Sensor calibration
 void calibrate_heart_rate_sensor(void);
-void calibrate_temperature_sensor(void);
+void calibrate_temperature_sensor(temp_sensor_type_t sensor);
 
 // Sensor status
 bool is_hr_sensor_ready(void);

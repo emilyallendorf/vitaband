@@ -20,6 +20,19 @@
 
 #include <sensors.h>
 #include <state_manager.h>
+#include <config.h>
+
+
+#ifdef CONFIG_USE_MOCK_SENSORS
+    #include "mock_sensors.h" 
+    #define read_heart_rate() mock_read_heart_rate()
+    #define read_temperature() mock_read_temperature()
+#else
+    #include "max86140.h"
+    #include "tmp117.h"
+    #define read_heart_rate() max86140_read_heartrate()
+    #define read_temperature() tmp117_read_temperature()
+#endif
 
 static bool hrf_ntf_enabled;
 
@@ -47,7 +60,7 @@ enum {
 	STATE_BITS,
 };
 
-static ATOMIC_DEFINE(state, STATE_BITS);
+static ATOMIC_DEFINE(ble_state, STATE_BITS);
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -56,7 +69,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	} else {
 		printk("Connected\n");
 
-		(void)atomic_set_bit(state, STATE_CONNECTED);
+		(void)atomic_set_bit(ble_state, STATE_CONNECTED);
 	}
 }
 
@@ -64,7 +77,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("Disconnected, reason 0x%02x %s\n", reason, bt_hci_err_to_str(reason));
 
-	(void)atomic_set_bit(state, STATE_DISCONNECTED);
+	(void)atomic_set_bit(ble_state, STATE_DISCONNECTED);
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -112,7 +125,7 @@ static void bas_notify(void)
 
 static void hrs_notify(void)
 {
-	uint8_t heartrate = max30102_read_heartrate();
+	uint8_t heartrate = read_heart_rate();
 
 	if (hrf_ntf_enabled) {
 		bt_hrs_notify(heartrate);
@@ -206,11 +219,11 @@ int main(void)
 	heart_rate_sensor_init();
 	temperature_sensor_init(BODY);
 	temperature_sensor_init(AMBIENT);
-	heart_rate_sensor_calibrate();
-	temperature_sensor_calibrate(BODY);
-	temperature_sensor_calibrate(AMBIENT);
+	// heart_rate_sensor_calibrate();
+	// temperature_sensor_calibrate(BODY);
+	// temperature_sensor_calibrate(AMBIENT);
 	vitaband_state_t state = OK;
-	bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
+	// bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
 
 
 #if !defined(CONFIG_BT_EXT_ADV)
@@ -275,57 +288,103 @@ int main(void)
 
 	/* Implement notification. */
 
-	while (1) {
-		k_sleep(K_SECONDS(1));
+    printk("Vitaband Shell Test Harness Ready.\n");
+    printk("Type 'help' in the terminal to see commands.\n");
 
-		/* sensor measurements simulation */
-		uint8_t hr = read_heart_rate();
-		float body_temp = read_temperature(BODY);
-		float ambient_temp = read_temperature(AMBIENT);
-		vitaband_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
-		hrs_notify();
+    while (1) {
 
-		float temperature = tmp117_read_temperature_float();
-		uint8_t heart_rate = max30102_read_heartrate();
-		uint8_t risk = calculate_risk_score(hr, body_temp, ambient_temp);
-		// TODO: timer logic to see if it has been long enough to change states
-		
-		if (has_been_long_enough) state = determine_state(risk);
-		execute_state_action(state);
+        /* 1. Get Sensor Readings */
+        // uint8_t heart_rate = read_heart_rate();
+        
+        // Note: I'm passing BODY to your mock function 
+        // Ensure mock_read_temperature(int type) handles this!
+        // float skin_temp = read_temperature(); 
+        // float ambient_temp = 22.0f; // Static mock for ambient
 
-		/* Battery level simulation */
-		bas_notify();
+        // /* 2. Evaluate State */
+        // // Using the function we wrote earlier
+		// uint8_t base_heart_rate = 120;
+		// // float base_skin_temp = 38
+		// uint8_t risk_score = calculate_risk_score(skin_temp, ambient_temp, heart_rate, base_heart_rate);
+        // vitaband_state_t new_state = determine_state(risk_score);
 
-		if (atomic_test_and_clear_bit(state, STATE_CONNECTED)) {
-			/* Connected callback executed */
+        // /* 3. Handle Transitions & Actions */
+        // if (new_state != state) {
+        //     handle_state_transition(state, new_state);
+        //     state = new_state;
+        // }
 
-#if defined(HAS_LED)
-			blink_stop();
-#endif /* HAS_LED */
-		} else if (atomic_test_and_clear_bit(state, STATE_DISCONNECTED)) {
-#if !defined(CONFIG_BT_EXT_ADV)
-			printk("Starting Legacy Advertising (connectable and scannable)\n");
-			err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd,
-					      ARRAY_SIZE(sd));
-			if (err) {
-				printk("Advertising failed to start (err %d)\n", err);
-				return 0;
-			}
+        // /* 4. Bluetooth Notifications */
+        // // This will now use the mock HR value
+        // hrs_notify();
+        // bas_notify();
 
-#else /* CONFIG_BT_EXT_ADV */
-			printk("Starting Extended Advertising (connectable and non-scannable)\n");
-			err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
-			if (err) {
-				printk("Failed to start extended advertising set (err %d)\n", err);
-				return 0;
-			}
-#endif /* CONFIG_BT_EXT_ADV */
+        // /* 5. Logging for your Test Bench */
+        // printk("[TEST] HR: %d bpm, Temp: %.2f C | State: %d\n", 
+        //         heart_rate, (double)skin_temp, state);
 
-#if defined(HAS_LED)
-			blink_start();
-#endif /* HAS_LED */
-		}
-	}
+        // /* 6. Check for Connection/Disconnection events */
+        // if (atomic_test_and_clear_bit(ble_state, STATE_CONNECTED)) {
+        //     printk("Event: Central device connected.\n");
+        //     #if defined(HAS_LED)
+        //     blink_stop(); // Stop blinking, stay solid on connection
+        //     #endif
+        // }
 
-	return 0;
+        // Wait 2 seconds between "poll" cycles so the terminal is readable
+        k_sleep(K_MSEC(2000));
+    }
 }
+
+		// /* sensor measurements simulation */
+		// uint8_t hr = read_heart_rate();
+		// float body_temp = read_temperature(BODY);
+		// float ambient_temp = read_temperature(AMBIENT);
+		// vitaband_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
+		// hrs_notify();
+
+		// float temperature = tmp117_read_temperature_float();
+		// uint8_t heart_rate = max30102_read_heartrate();
+		// uint8_t risk = calculate_risk_score(hr, body_temp, ambient_temp);
+		// // TODO: timer logic to see if it has been long enough to change states
+		
+		// if (has_been_long_enough) state = determine_state(risk);
+		// execute_state_action(state);
+
+		// /* Battery level simulation */
+		// bas_notify();
+
+		// if (atomic_test_and_clear_bit(state, STATE_CONNECTED)) {
+		// 	/* Connected callback executed */
+
+// #if defined(HAS_LED)
+// 			blink_stop();
+// #endif /* HAS_LED */
+// // 		} else if (atomic_test_and_clear_bit(state, STATE_DISCONNECTED)) {
+// #if !defined(CONFIG_BT_EXT_ADV)
+// 			printk("Starting Legacy Advertising (connectable and scannable)\n");
+// 			err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd,
+// 					      ARRAY_SIZE(sd));
+// 			if (err) {
+// 				printk("Advertising failed to start (err %d)\n", err);
+// 				return 0;
+// 			}
+
+// #else /* CONFIG_BT_EXT_ADV */
+// 			printk("Starting Extended Advertising (connectable and non-scannable)\n");
+// 			err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
+// 			if (err) {
+// 				printk("Failed to start extended advertising set (err %d)\n", err);
+// 				return 0;
+// 			}
+// #endif /* CONFIG_BT_EXT_ADV */
+
+// #if defined(HAS_LED)
+// 			blink_start();
+// #endif /* HAS_LED */
+// 		}
+// 	}
+
+// 	return 0;
+
+

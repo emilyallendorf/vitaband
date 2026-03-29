@@ -17,6 +17,48 @@ static float clampf (float x, float lo, float hi)
     return x;
 }
 
+
+void state_manager_init(void)
+{
+    
+    int err;
+
+    LOG_INF("Initializing State Manager...");
+
+    /* 1. Set default starting state */
+    vitaband_state_t current_system_state = OK;
+
+    #ifdef CONFIG_USE_MOCK_SENSORS
+        /* Logic for the MOCK case */
+        LOG_INF("Mock Mode: Skipping SHT3x hardware check.");
+        current_system_state = OK; 
+        return 0;
+    #else
+        /* 2. Validate/Initialize Hardware Dependencies */
+        // Initialize Temperature/Humidity Sensor
+        err = sht3xdis_init();
+        if (err != 0) {
+            LOG_ERR("SHT3x Sensor failed to init (err %d)", err);
+            current_system_state = EMERGENCY;
+        }
+        return 0;
+    #endif
+
+    
+
+    // Initialize Heart Rate Sensor (Example call)
+    // err = max86140_init(); 
+    // if (err != 0) { ... }
+
+    /* 3. Final Status Check */
+    if (current_system_state == OK) {
+        LOG_INF("System State Manager initialized successfully: [%s]", 
+                get_state_string(current_system_state));
+    } else {
+        LOG_WRN("System started in EMERGENCY mode due to hardware failure.");
+    }
+}
+
 uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, 
 uint8_t heart_rate, uint8_t base_heart_rate) {
     if (base_heart_rate == 0) return 0;
@@ -148,8 +190,14 @@ bool emergency_button_pressed, bool emergency_button_long) {
     return next_state;
 }
 
-void execute_state_actions(vitaband_state_t state) {
-    switch (state) {
+void handle_state_transition(vitaband_state_t old_state, vitaband_state_t new_state)
+{
+    /* 1. Ignore if the state hasn't actually changed */
+    if (old_state == new_state) {
+        return;
+    }  
+    
+    switch (new_state) {
         case OK:
             // Pulse Green LED slowly
             // LOG_INF("All clear: System Green");

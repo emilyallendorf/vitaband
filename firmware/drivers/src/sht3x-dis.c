@@ -2,7 +2,7 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/types.h>
-#include "sht3xdis.h"
+#include "sht3x-dis.h"
 
 LOG_MODULE_REGISTER(sht3xdis, LOG_LEVEL_INF);
 

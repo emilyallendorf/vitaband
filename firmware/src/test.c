@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
+#include <stdlib.h>
 #include "mock_sensors.h"
 #include "state_manager.h"
 #include "power.h"
@@ -18,8 +19,8 @@ LOG_MODULE_REGISTER(test_harness, LOG_LEVEL_INF);
 /* ========================================================================== */
 
 static bool test_running = false;
-static device_state_t current_state = STATE_OK;
-static device_state_t previous_state = STATE_OK;
+static vitaband_state_t current_state = STATE_OK;
+static vitaband_state_t previous_state = STATE_OK;
 
 /* Statistics */
 static struct {
@@ -29,6 +30,22 @@ static struct {
     uint32_t total_transitions;
     uint32_t last_transition_time;
 } test_stats = {0};
+
+const char* get_state_string(vitaband_state_t state) {
+     switch (state) {
+        case 0:
+            return "OK";
+        case 1:
+            return "WARNING";
+        case 2:
+            return "CRITICAL";
+        case 3:
+            return "EMERGENCY";
+        default:
+            return "OK";
+    }
+}
+
 
 /* ========================================================================== */
 /* TEST LOOP                                                                  */
@@ -41,7 +58,8 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
     ARG_UNUSED(arg3);
     
     LOG_INF("=== Test Harness Started ===");
-    
+    float base_temp = mock_read_temperature();
+    uint8_t base_hr = mock_read_heart_rate();
     while (test_running) {
         /* Update scenario if active */
         mock_sensors_update_scenario();
@@ -59,7 +77,8 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
         }
         
         /* Evaluate device state */
-        current_state = evaluate_device_state(hr, temp);
+        uint8_t score = calculate_risk_score(temp, base_temp, hr, base_hr);
+        current_state = determine_state(score);
         
         /* Check for state transition */
         if (current_state != previous_state) {
