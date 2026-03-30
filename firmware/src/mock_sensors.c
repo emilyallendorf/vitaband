@@ -25,7 +25,8 @@ static mock_sensor_config_t config = {
     .temperature = 36.5f,
     .battery_voltage = 3700,
     .noise_enabled = false,
-    .noise_amplitude = 5
+    .noise_amplitude = 5,
+    .button_status = UNPRESSED
 };
 
 static mock_scenario_t current_scenario = SCENARIO_NONE;
@@ -66,6 +67,11 @@ void mock_sensors_set_temperature(float temp)
 {
     config.temperature = temp;
     LOG_INF("Mock temp set to: %.1f°C", temp);
+}
+
+void mock_sensors_set_button_status(button_status_t status){
+    config.button_status = status;
+    LOG_INF("Button status set");
 }
 
 void mock_sensors_set_battery(uint16_t voltage_mv)
@@ -205,6 +211,10 @@ uint16_t mock_read_battery_voltage(void)
     voltage = CLAMP(voltage, 2500, 4500);
     
     return voltage;
+}
+
+button_status_t mock_read_button_status(void) {
+    return config.button_status;
 }
 
 /* ========================================================================== */

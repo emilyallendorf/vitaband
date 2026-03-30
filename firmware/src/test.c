@@ -46,6 +46,19 @@ const char* get_state_string(vitaband_state_t state) {
     }
 }
 
+const char* get_status_string(button_status_t status) {
+     switch (status) {
+        case 0:
+            return "UNPRESSED";
+        case 1:
+            return "PRESSED";
+        case 2:
+            return "LONG_PRESS";
+        default:
+            return "UNDEFINED";
+    }
+}
+
 
 /* ========================================================================== */
 /* TEST LOOP                                                                  */
@@ -63,23 +76,12 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
     uint8_t base_hr = mock_read_heart_rate();
     
     while (test_running) {
-        /* Log current status every 5 seconds */
-    // static uint32_t last_log_time = 0;
-    // uint32_t now = k_uptime_get_32();
+        mock_sensors_update_scenario();
 
-        // if ((now - last_log_time) >= 100000) {
-        //     // This code only runs once every 5 iterations of the loop
-        //     uint32_t uptime_seconds = now / 1000;
-            
-        //     LOG_INF("--- [Heartbeat] Uptime: %u seconds | State: %s ---", 
-        //             uptime_seconds, 
-        //             get_state_string(current_state));
-                    
-        //     last_log_time = now; // Reset the timer
-        // }
         /* 1. Get the numbers */
         uint8_t hr = mock_read_heart_rate();
         float temp = mock_read_temperature();
+        button_status_t status = mock_read_button_status();
         
         /* 2. Calculate PSI */
         uint8_t score = calculate_risk_score(temp, base_temp, hr, base_hr);
@@ -87,7 +89,7 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
 
         /* 3. FORCE THE UPDATE */
         // Pass the  previous state so the state machine knows where it is
-        current_state = determine_state(previous_state, psi_value, false, false);
+        current_state = determine_state(previous_state, psi_value, status);
 
         /* 4. DEBUG EVERYTHING */
         printk("DEBUG: PSI=%.1f, CurrState=%s\n", 
@@ -277,6 +279,28 @@ static int cmd_mock_temp(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+static int cmd_mock_button(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_error(sh, "Usage: mock button <status>");
+        return -EINVAL;
+    }
+    
+    button_status_t status;
+
+    if (strcmp(argv[1], "PRESSED") == 0)  status = PRESSED;
+    else if (strcmp(argv[1], "UNPRESSED") == 0) status = UNPRESSED;
+    else if (strcmp(argv[1], "LONG_PRESS") == 0) status = LONG_PRESS;
+    else {
+        shell_error(sh, "Invalid status. Use PRESSED or UNPRESSED or LONG_PRESS");
+        return -EINVAL;
+    }
+    
+    mock_sensors_set_button_status(status);
+    shell_print(sh, "Button status set to %s", get_status_string(status));
+    return 0;
+}
+
 static int cmd_mock_battery(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc != 2) {
@@ -426,6 +450,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(mock_cmds,
     SHELL_CMD(battery, NULL, "Set battery <mv>", cmd_mock_battery),
     SHELL_CMD(mode, NULL, "Set mode <static|random|sine>", cmd_mock_mode),
     SHELL_CMD(noise, NULL, "Set noise <on|off> <amplitude>", cmd_mock_noise),
+    SHELL_CMD(button, NULL, "Set button <status>", cmd_mock_button),
     SHELL_SUBCMD_SET_END
 );
 

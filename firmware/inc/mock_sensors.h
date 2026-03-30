@@ -9,6 +9,7 @@
 #include <zephyr/types.h>
 #include <stdbool.h>
 #include <config.h>
+#include "state_manager.h"
 
 
 /* ========================================================================== */
@@ -48,6 +49,7 @@ typedef struct {
     uint16_t battery_voltage;
     bool noise_enabled;
     uint8_t noise_amplitude;
+    button_status_t button_status;
 } mock_sensor_config_t;
 
 /* ========================================================================== */

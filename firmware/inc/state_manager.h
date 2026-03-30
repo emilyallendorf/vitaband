@@ -20,6 +20,12 @@ typedef struct {
     uint8_t risk_score; // 1-10 scale
 } vitaband_status_t;
 
+typedef enum {
+    UNPRESSED,
+    PRESSED,
+    LONG_PRESS
+} button_status_t;
+
 void state_manager_init(void);
 
 // const char* get_state_string(enum device_state state);
@@ -35,7 +41,7 @@ uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t hr, 
 /**
  * @brief Determines the state based on the 1-10 risk score.
  */
-vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, bool emergency_button_pressed, bool emergency_button_long);
+vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_status_t status);
 
 
 #endif

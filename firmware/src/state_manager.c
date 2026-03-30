@@ -56,7 +56,8 @@ uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t hear
     return (uint8_t) (psi + 0.5f);
 }
 
-vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, bool emergency_button_pressed, bool emergency_button_long) {
+// vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, bool emergency_button_pressed, bool emergency_button_long) {
+vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_status_t button_status) {
     static int64_t ge3_start_ms  = -1;   // PSI >= 3.0
     static int64_t ge7_start_ms  = -1;   // PSI >= 7.0
     static int64_t le65_start_ms = -1;   // PSI <= 6.5
@@ -64,7 +65,7 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, bool em
 
     int64_t now = k_uptime_get();
     vitaband_state_t next_state = curr_state;
-    if (curr_state!=EMERGENCY && emergency_button_pressed==true){
+    if (curr_state!=EMERGENCY && button_status==PRESSED){
         LOG_INF("State change: %d -> %d (emergency button pressed)", curr_state, EMERGENCY);
         ge3_start_ms  = -1;
         ge7_start_ms  = -1;
@@ -74,7 +75,7 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, bool em
     }
     if (curr_state==EMERGENCY)
     {
-        if (emergency_long_press)
+        if (button_status==LONG_PRESS)
         {
             LOG_INF("State change: %d -> %d (emergency button long-pressed)",
             EMERGENCY, WARNING);
