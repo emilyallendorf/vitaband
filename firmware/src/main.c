@@ -331,8 +331,7 @@ int main(void)
         //     #endif
         // }
 
-        // Wait 2 seconds between "poll" cycles so the terminal is readable
-        k_sleep(K_MSEC(2000));
+        k_sleep(K_FOREVER);
     }
 }
 

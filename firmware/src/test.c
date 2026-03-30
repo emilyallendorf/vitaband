@@ -53,6 +53,7 @@ const char* get_state_string(vitaband_state_t state) {
 
 static void test_loop_thread(void *arg1, void *arg2, void *arg3)
 {
+    printk("!!! THREAD IS ALIVE: Entering Loop !!!\n");
     ARG_UNUSED(arg1);
     ARG_UNUSED(arg2);
     ARG_UNUSED(arg3);
@@ -60,81 +61,62 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
     LOG_INF("=== Test Harness Started ===");
     float base_temp = mock_read_temperature();
     uint8_t base_hr = mock_read_heart_rate();
+    
     while (test_running) {
-        /* Update scenario if active */
-        mock_sensors_update_scenario();
-        
-        /* Read mock sensors */
+        /* Log current status every 5 seconds */
+    // static uint32_t last_log_time = 0;
+    // uint32_t now = k_uptime_get_32();
+
+        // if ((now - last_log_time) >= 100000) {
+        //     // This code only runs once every 5 iterations of the loop
+        //     uint32_t uptime_seconds = now / 1000;
+            
+        //     LOG_INF("--- [Heartbeat] Uptime: %u seconds | State: %s ---", 
+        //             uptime_seconds, 
+        //             get_state_string(current_state));
+                    
+        //     last_log_time = now; // Reset the timer
+        // }
+        /* 1. Get the numbers */
         uint8_t hr = mock_read_heart_rate();
         float temp = mock_read_temperature();
-        uint16_t battery_mv = mock_read_battery_voltage();
         
-        /* Calculate battery percentage (for logging) */
-        uint8_t battery_pct = 0;
-        if (battery_mv >= 4200) battery_pct = 100;
-        else if (battery_mv >= 3000) {
-            battery_pct = ((battery_mv - 3000) * 100) / 1200;
-        }
-        
-        /* Evaluate device state */
+        /* 2. Calculate PSI */
         uint8_t score = calculate_risk_score(temp, base_temp, hr, base_hr);
-        current_state = determine_state(score);
-        
-        /* Check for state transition */
+        float psi_value = (float)score; // Or however your math returns PSI
+
+        /* 3. FORCE THE UPDATE */
+        // Pass the  previous state so the state machine knows where it is
+        current_state = determine_state(previous_state, psi_value, false, false);
+
+        /* 4. DEBUG EVERYTHING */
+        printk("DEBUG: PSI=%.1f, CurrState=%s\n", 
+(double)psi_value, get_state_string(current_state));
+
+        /* 5. The Transition Check */
         if (current_state != previous_state) {
-            test_stats.total_transitions++;
-            test_stats.last_transition_time = k_uptime_get_32();
+            printk("!!! TRANSITION DETECTED !!!\n");
             
-            LOG_WRN("=== STATE TRANSITION: %s -> %s ===",
-                    get_state_string(previous_state),
+            LOG_WRN("STATE CHANGE: %s -> %s", 
+                    get_state_string(previous_state), 
                     get_state_string(current_state));
-            LOG_INF("Vitals: HR=%u BPM, Temp=%.1f°C, Battery=%u%%",
-                    hr, temp, battery_pct);
-            
-            /* Trigger haptic alert */
-            haptics_trigger_alert(current_state);
-            
-            /* Call state transition handler */
+
             handle_state_transition(previous_state, current_state);
             
+            /* CRITICAL: Update the previous state so we don't trigger again next second */
             previous_state = current_state;
         }
-        
-        /* Update statistics */
-        switch (current_state) {
-            case STATE_OK:
-                test_stats.state_ok_count++;
-                break;
-            case STATE_WARNING:
-                test_stats.state_warning_count++;
-                break;
-            case STATE_EMERGENCY:
-                test_stats.state_emergency_count++;
-                break;
-        }
-        
-        /* Log current status every 5 seconds */
-        static uint32_t last_log_time = 0;
-        uint32_t now = k_uptime_get_32();
-        if ((now - last_log_time) >= 5000) {
-            LOG_INF("Status: %s | HR=%u | Temp=%.1f | Batt=%u%% (%umV)",
-                    get_state_string(current_state),
-                    hr, temp, battery_pct, battery_mv);
-            last_log_time = now;
-        }
-        
-        /* Sleep */
-        k_msleep(1000);  /* 1 Hz update rate */
-    }
-    
-    LOG_INF("=== Test Harness Stopped ===");
-}
 
-K_THREAD_DEFINE(test_thread, 2048, test_loop_thread, NULL, NULL, NULL, 7, 0, 0);
+        k_msleep(1000);
+    }
+}
 
 /* ========================================================================== */
 /* TEST CONTROL                                                               */
 /* ========================================================================== */
+K_THREAD_STACK_DEFINE(test_stack, 2048);
+    static struct k_thread test_thread_data;
+    static k_tid_t test_thread;
 
 void test_harness_start(void)
 {
@@ -142,21 +124,30 @@ void test_harness_start(void)
         LOG_WRN("Test already running");
         return;
     }
+
     
     LOG_INF("Starting test harness");
     
     /* Initialize mock sensors */
     mock_sensors_init();
     
-    /* Initialize state manager */
+    // /* Initialize state manager */
     state_manager_init();
     
     /* Initialize haptics */
     haptics_init();
     
     /* Start test thread */
+
     test_running = true;
-    k_thread_start(test_thread);
+    
+    test_thread = k_thread_create(&test_thread_data,
+                             test_stack,
+                             K_THREAD_STACK_SIZEOF(test_stack),
+                             test_loop_thread,
+                             NULL, NULL, NULL,
+                             1, 0, K_NO_WAIT);
+    printk("DEBUG: k_thread_start() called successfully.\n");
 }
 
 void test_harness_stop(void)
