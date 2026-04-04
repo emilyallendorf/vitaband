@@ -9,6 +9,7 @@
 
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/logging/log.h>
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
@@ -22,17 +23,23 @@
 #include <state_manager.h>
 #include <config.h>
 
+// temp_sensor_type_t sensor
 
-#ifdef CONFIG_USE_MOCK_SENSORS
-    #include "mock_sensors.h" 
-    #define read_heart_rate() mock_read_heart_rate()
-    #define read_temperature() mock_read_temperature()
-#else
-    #include "max86140.h"
-    #include "tmp117.h"
-    #define read_heart_rate() max86140_read_heartrate()
-    #define read_temperature() tmp117_read_temperature()
-#endif
+LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
+
+
+// #ifdef CONFIG_USE_MOCK_SENSORS
+//     #include "mock_sensors.h" 
+//     #define read_heart_rate() mock_read_heart_rate()
+//     #define read_skin_temperature() mock_read_temperature()
+// 	#
+// #else
+//     #include "max86140.h"
+//     #include "tmp117.h"
+//     #define read_heart_rate() read_heart_rate()
+//     #define read_temperature() read_temperature() 
+// #endif
+
 
 static bool hrf_ntf_enabled;
 
@@ -110,6 +117,7 @@ static struct bt_conn_auth_cb auth_cb_display = {
 	.cancel = auth_cancel,
 };
 
+//TODO: get rid of this functionality because we cant read from the battery
 static void bas_notify(void)
 {
 	uint8_t battery_level = bt_bas_get_battery_level();
@@ -199,9 +207,76 @@ static void blink_stop(void)
 #endif /* LED0_NODE */
 #endif /* CONFIG_GPIO */
 
+// BUTTON
+#define BUTTON_NODE  DT_ALIAS(emergency_button)
+static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(BUTTON_NODE, gpios);
+ 
+#define LONG_PRESS_MS  1500
+ 
+static volatile int64_t button_press_time_ms = 0;
+static volatile bool    button_active        = false;
+static struct gpio_callback button_cb_data;
+ 
+static void button_isr(const struct device *dev, struct gpio_callback *cb,
+                       uint32_t pins)
+{
+    /* ACTIVE_LOW: logical 1 = pressed (pin physically LOW) */
+    if (gpio_pin_get_dt(&button) == 1) {
+        button_press_time_ms = k_uptime_get();
+        button_active        = true;
+    } else {
+        button_active = false;
+    }
+}
+ 
+static button_status_t poll_button(void)
+{
+    int64_t now = k_uptime_get();
+ 
+    if (button_active) {
+        if ((now - button_press_time_ms) >= LONG_PRESS_MS) {
+            button_active = false;
+            return LONG_PRESS;
+        }
+        return UNPRESSED;
+    }
+ 
+    if (button_press_time_ms > 0) {
+        button_press_time_ms = 0;
+        return PRESSED;
+    }
+ 
+    return UNPRESSED;
+}
+
+static int button_init(void)
+{
+    if (!gpio_is_ready_dt(&button)) {
+        LOG_ERR("Button GPIO not ready");
+        return -ENODEV;
+    }
+    /* GPIO_INPUT only — hardware pull-up already present (R9) */
+    int ret = gpio_pin_configure_dt(&button, GPIO_INPUT);
+    if (ret) { LOG_ERR("Button configure failed: %d", ret); return ret; }
+ 
+    ret = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_BOTH);
+    if (ret) { LOG_ERR("Button interrupt configure failed: %d", ret); return ret; }
+ 
+    gpio_init_callback(&button_cb_data, button_isr, BIT(button.pin));
+    gpio_add_callback(button.port, &button_cb_data);
+ 
+    LOG_INF("Button ready on P0.%d", button.pin);
+    return 0;
+}
+
+//BASELINE
+static float   base_skin_temp  = 34.0f;  /* fallback until first reading */
+static uint8_t base_heart_rate = 72;
+
 int main(void)
 {
 	int err;
+	LOG_INF("VitaBand starting...");
 
 	err = bt_enable(NULL);
 	if (err) {
@@ -215,15 +290,31 @@ int main(void)
 
 	bt_hrs_cb_register(&hrs_cb);
 
-	// Sensor initialization TODO: delays?
-	heart_rate_sensor_init();
-	temperature_sensor_init(BODY);
-	temperature_sensor_init(AMBIENT);
-	// heart_rate_sensor_calibrate();
-	// temperature_sensor_calibrate(BODY);
-	// temperature_sensor_calibrate(AMBIENT);
-	vitaband_state_t state = OK;
-	// bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
+	// Sensor initialization
+    temperature_sensor_init(BODY);
+    temperature_sensor_init(AMBIENT);
+    heart_rate_sensor_init();
+    button_init();
+	state_manager_init();
+    
+	// Calibration
+	k_msleep(500);
+	float first_skin = read_temperature(BODY);
+    if (first_skin > -50.0f) {
+        base_skin_temp = first_skin;
+        LOG_INF("Baseline skin temp: %.2f C", (double)base_skin_temp);
+    } else {
+        LOG_WRN("TMP117 not ready — using %.1f C fallback",
+                (double)base_skin_temp);
+    }
+
+	calibrate_temperature_sensor(BODY);
+	calibrate_temperature_sensor(AMBIENT);
+	calibrate_heart_rate_sensor();
+	bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) & is_temp_sensor_ready(AMBIENT);
+	if (!sensors_ready) LOG_WRN("Sensors not ready / need calibration", (double)base_skin_temp);
+
+	vitaband_state_t curr_state = OK;
 
 
 #if !defined(CONFIG_BT_EXT_ADV)
@@ -293,26 +384,39 @@ int main(void)
 
     while (1) {
 
-        /* 1. Get Sensor Readings */
-        // uint8_t heart_rate = read_heart_rate();
-        
-        // Note: I'm passing BODY to your mock function 
-        // Ensure mock_read_temperature(int type) handles this!
-        // float skin_temp = read_temperature(); 
-        // float ambient_temp = 22.0f; // Static mock for ambient
+		int64_t tick_start = k_uptime_get();
 
-        // /* 2. Evaluate State */
-        // // Using the function we wrote earlier
-		// uint8_t base_heart_rate = 120;
-		// // float base_skin_temp = 38
-		// uint8_t risk_score = calculate_risk_score(skin_temp, ambient_temp, heart_rate, base_heart_rate);
-        // vitaband_state_t new_state = determine_state(risk_score);
+		// Read sensors
+        float   skin_temp    = read_temperature(BODY);
+        float   ambient_temp = read_temperature(AMBIENT);
+        float   humidity     = read_humidity();
+        uint8_t heart_rate   = read_heart_rate();
 
-        // /* 3. Handle Transitions & Actions */
-        // if (new_state != state) {
-        //     handle_state_transition(state, new_state);
-        //     state = new_state;
-        // }
+        // Compute PSI
+        uint8_t psi_int = calculate_risk_score(skin_temp, base_skin_temp, heart_rate, base_heart_rate);
+        float psi = (float)psi_int;
+
+		// Poll button
+        button_status_t btn = poll_button();
+
+		// State machine
+        vitaband_state_t next_state = determine_state(curr_state, psi, btn);
+        if (next_state != curr_state) {
+            handle_state_transition(curr_state, next_state);
+            curr_state = next_state;
+        }
+
+		 LOG_INF("skin=%.2f amb=%.2f hum=%.0f%% hr=%u psi=%u state=%d btn=%d",
+                (double)skin_temp, (double)ambient_temp, (double)humidity,
+                heart_rate, psi_int, curr_state, (int)btn);
+
+        // Sleep remainder of the 1 s tick
+        int64_t elapsed  = k_uptime_get() - tick_start;
+        int32_t sleep_ms = (int32_t)(1000 - elapsed);
+        if (sleep_ms > 0) k_msleep(sleep_ms);
+    }
+ 
+    return 0;
 
         // /* 4. Bluetooth Notifications */
         // // This will now use the mock HR value
@@ -330,60 +434,6 @@ int main(void)
         //     blink_stop(); // Stop blinking, stay solid on connection
         //     #endif
         // }
-
-        k_sleep(K_FOREVER);
-    }
 }
-
-		// /* sensor measurements simulation */
-		// uint8_t hr = read_heart_rate();
-		// float body_temp = read_temperature(BODY);
-		// float ambient_temp = read_temperature(AMBIENT);
-		// vitaband_state_t state = evaluate_device_state(hr, body_temp, ambient_temp);
-		// hrs_notify();
-
-		// float temperature = tmp117_read_temperature_float();
-		// uint8_t heart_rate = max30102_read_heartrate();
-		// uint8_t risk = calculate_risk_score(hr, body_temp, ambient_temp);
-		// // TODO: timer logic to see if it has been long enough to change states
-		
-		// if (has_been_long_enough) state = determine_state(risk);
-		// execute_state_action(state);
-
-		// /* Battery level simulation */
-		// bas_notify();
-
-		// if (atomic_test_and_clear_bit(state, STATE_CONNECTED)) {
-		// 	/* Connected callback executed */
-
-// #if defined(HAS_LED)
-// 			blink_stop();
-// #endif /* HAS_LED */
-// // 		} else if (atomic_test_and_clear_bit(state, STATE_DISCONNECTED)) {
-// #if !defined(CONFIG_BT_EXT_ADV)
-// 			printk("Starting Legacy Advertising (connectable and scannable)\n");
-// 			err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd,
-// 					      ARRAY_SIZE(sd));
-// 			if (err) {
-// 				printk("Advertising failed to start (err %d)\n", err);
-// 				return 0;
-// 			}
-
-// #else /* CONFIG_BT_EXT_ADV */
-// 			printk("Starting Extended Advertising (connectable and non-scannable)\n");
-// 			err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
-// 			if (err) {
-// 				printk("Failed to start extended advertising set (err %d)\n", err);
-// 				return 0;
-// 			}
-// #endif /* CONFIG_BT_EXT_ADV */
-
-// #if defined(HAS_LED)
-// 			blink_start();
-// #endif /* HAS_LED */
-// 		}
-// 	}
-
-// 	return 0;
 
 

@@ -15,7 +15,7 @@ target_sources(app PRIVATE
     src/state_manager.c
     src/test.c
     drivers/src/tmp117.c
-    # drivers/src/max86140.c
+    drivers/src/max86140.c
     drivers/src/sht3x-dis.c
     drivers/src/alarm.c
     drivers/src/buzzer.c

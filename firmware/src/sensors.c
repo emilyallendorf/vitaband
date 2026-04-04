@@ -4,7 +4,6 @@
 
 #include "sensors.h"
 #include <errno.h>
-#include <stdbool.h>
 #include <zephyr/logging/log.h>
 
 
@@ -27,10 +26,15 @@ temp_sensor_states_t temperature_sensors_calibrated = {
     .ambient = false
 };
 
-void heart_rate_sensor_init(void) {
-    // int ret = max86140_init();
-    // if (ret == 0) heart_rate_sensor_initialized = true;
-    return true;
+void heart_rate_sensor_init(void)
+{
+    int ret = max86140_init();
+    if (ret == 0) {
+        heart_rate_sensor_initialized = true;
+        LOG_INF("Heart rate sensor initialized successfully.");
+    } else {
+        LOG_ERR("Heart rate sensor init failed: %d", ret);
+    }
 }
 
 void temperature_sensor_init(temp_sensor_type_t sensor) {
@@ -54,16 +58,13 @@ void temperature_sensor_init(temp_sensor_type_t sensor) {
 }
 
 uint8_t read_heart_rate(void) {
-    if (!temperature_sensors_initialized.ambient) return NO_HUM;
-    // uint8_t heart_rate = max86140_read_heartrate();
-    uint8_t heart_rate = 42;
-    return heart_rate;
+    if (!heart_rate_sensor_initialized) return NO_HR;
+    return max86140_read_heartrate();
 }
 
-uint8_t read_humidity(void) {
-    if (!heart_rate_sensor_initialized) return NO_HR;
-    uint8_t humidity = sht3xdis_read_humidity();
-    return humidity;
+float read_humidity(void) {
+    if (!temperature_sensors_initialized.ambient) return NO_HUM;
+    return (float)sht3xdis_read_humidity();
 }
 
 float read_temperature(temp_sensor_type_t sensor) {
@@ -76,12 +77,12 @@ float read_temperature(temp_sensor_type_t sensor) {
             return sht3xdis_read_temperature();
          default: 
             LOG_ERR("Invalid sensor type provided: %d", sensor);
-            return;
+            return NO_TEMP;
     }
 }
 
 
-// Perform calibration routines
+// TODO: Perform calibration routines
 void calibrate_heart_rate_sensor(void) {
     heart_rate_sensor_calibrated = true;
 }

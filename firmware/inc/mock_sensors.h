@@ -9,6 +9,7 @@
 #include <zephyr/types.h>
 #include <stdbool.h>
 #include <config.h>
+#include <sensors.h>
 #include "state_manager.h"
 
 

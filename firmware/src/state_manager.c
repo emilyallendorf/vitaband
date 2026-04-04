@@ -3,8 +3,6 @@
 
 #include <stdlib.h>
 
-bool emergency_long_press = false;
-
 
 LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_INF);
 #define BASE_CORE_TEMP_C   37.0f
