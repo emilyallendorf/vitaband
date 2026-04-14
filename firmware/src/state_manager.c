@@ -115,25 +115,25 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
     } else {
         le25_start_ms = -1;
     }
-    switch (curr_state) {
+    switch (current_state) {
     case OK:
-        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 1000) {
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
             next_state = CRITICAL;
-        } else if (ge3_start_ms >= 0 && (now - ge3_start_ms) >= 3000) {
+        } else if (ge3_start_ms >= 0 && (now - ge3_start_ms) >= 30000) {
             next_state = WARNING;
         }
         break;
 
     case WARNING:
-        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 1000) {
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
             next_state = CRITICAL;
-        } else if (le25_start_ms >= 0 && (now - le25_start_ms) >= 3000) {
+        } else if (le25_start_ms >= 0 && (now - le25_start_ms) >= 30000) {
             next_state = OK;
         }
         break;
 
     case CRITICAL:
-        if (le65_start_ms >= 0 && (now - le65_start_ms) >= 1500) {
+        if (le65_start_ms >= 0 && (now - le65_start_ms) >= 15000) {
             next_state = WARNING;
         }
         break;
@@ -141,9 +141,9 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
         next_state=OK;
         break;
         
-    if (next_state != curr_state) {
+    if (next_state != current_state) {
         LOG_INF("State change: %d -> %d, psi=%.2f",
-                curr_state, next_state, (double)psi);
+                current_state, next_state, (double)psi);
         ge3_start_ms  = -1;
         ge7_start_ms  = -1;
         le65_start_ms = -1;
