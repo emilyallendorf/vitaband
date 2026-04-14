@@ -14,6 +14,14 @@
 int sht3xdis_init(void);
 
 /**
+ * @brief Single-shot temperature + relative humidity (one I2C measurement).
+ * @param temp_c Output temperature in °C.
+ * @param rh_pct Output relative humidity in % (0–100).
+ * @return 0 on success, negative errno from I2C layer on failure.
+ */
+int sht3xdis_read_all(float *temp_c, float *rh_pct);
+
+/**
  * @brief Read the ambient temperature.
  * * @return Temperature as uint8_t (or float/int16_t for high precision).
  */

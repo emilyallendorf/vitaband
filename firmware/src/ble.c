@@ -1,65 +1,73 @@
 /*
- * Bluetooth Low Energy Implementation
- * Example implementation - adapt for your BLE stack (Nordic, ESP32, etc.)
+ * VitaBand BLE: custom GATT health telemetry (read + notify).
  */
 
-#include "ble.h"
 #include <string.h>
 
-// Connection state
-static bool ble_connected = false;
-static uint16_t connection_handle = 0; //?
-// Characteristic handles (assigned during service initialization)
-static uint16_t heart_rate_char_handle = 0; //?
-static uint16_t temperature_char_handle = 0; //?
-static uint16_t combined_data_char_handle = 0; //?
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/kernel.h>
 
-void ble_init(void) {
-    // Initialize BLE stack
-    // Configure device name, appearance, connection parameters
-    
-    // Example pseudo-code for Nordic nRF52 or similar:
-    // sd_ble_gap_device_name_set("Wearable");
-    // sd_ble_gap_appearance_set(BLE_APPEARANCE_GENERIC_WATCH);
-    
-    // Initialize services
-    init_heart_rate_service();
-    init_temperature_service();
-    init_custom_service();
-    
-    // Set advertising data
-    setup_advertising_data();
+#include "ble.h"
+
+static const struct bt_uuid_128 vitaband_svc_uuid =
+	BT_UUID_INIT_128(VITABAND_HEALTH_SVC_UUID_VAL);
+static const struct bt_uuid_128 vitaband_chr_telemetry_uuid =
+	BT_UUID_INIT_128(VITABAND_HEALTH_CHR_TELEMETRY_UUID_VAL);
+
+static uint8_t last_payload[VITABAND_HEALTH_NOTIFY_PAYLOAD_LEN];
+static bool    notify_enabled;
+
+static void encode_payload(uint8_t *d, uint8_t hr_bpm, float body_c, float amb_c,
+			   vitaband_state_t state, uint32_t uptime_ms)
+{
+	d[0] = hr_bpm;
+	memcpy(&d[1], &body_c, sizeof(float));
+	memcpy(&d[5], &amb_c, sizeof(float));
+	d[9] = (uint8_t)state;
+	memcpy(&d[10], &uptime_ms, sizeof(uint32_t));
 }
 
-void ble_start_advertising(void) {
-    // Start BLE advertising
-    // Configure advertising interval, timeout, etc.
-    
-    // Example:
-    // sd_ble_gap_adv_start(&adv_params);
+static ssize_t read_telemetry(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+			      uint16_t len, uint16_t offset)
+{
+	ARG_UNUSED(attr);
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, last_payload,
+				 sizeof(last_payload));
 }
 
-void ble_stop_advertising(void) {
-    // Stop BLE advertising
-    // sd_ble_gap_adv_stop();
+static void ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	ARG_UNUSED(attr);
+
+	notify_enabled = (value == BT_GATT_CCC_NOTIFY);
 }
 
-bool ble_is_connected(void) {
-    return ble_connected;
+BT_GATT_SERVICE_DEFINE(ble_health_svc,
+		       BT_GATT_PRIMARY_SERVICE(&vitaband_svc_uuid),
+		       BT_GATT_CHARACTERISTIC(&vitaband_chr_telemetry_uuid.uuid,
+					      BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+					      BT_GATT_PERM_READ, read_telemetry, NULL, NULL),
+		       BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE));
+
+bool vitaband_health_notify_enabled(void)
+{
+	return notify_enabled;
 }
 
-void send_ble_data(const sensor_data_t *data) {
-    if (!ble_connected) {
-        return;
-    }
-    
-    // Send combined data packet
-    // Format: [HR (1 byte)][Temp (4 bytes float)][Timestamp (4 bytes)]
-    uint8_t packet[9];
-    packet[0] = data->heart_rate;
-    memcpy(&packet[1], &data->temperature, sizeof(float));
-    memcpy(&packet[5], &data->timestamp, sizeof(uint32_t));
-    
-    // Send notification to phone
-    // ble_notify(combined_data_char_handle, packet, sizeof(packet));
+int vitaband_health_notify(uint8_t hr_bpm, float body_temp_c, float ambient_temp_c,
+			   vitaband_state_t state)
+{
+	if (!notify_enabled) {
+		return 0;
+	}
+
+	uint32_t uptime_ms = k_uptime_get_32();
+
+	encode_payload(last_payload, hr_bpm, body_temp_c, ambient_temp_c, state, uptime_ms);
+
+	return bt_gatt_notify(NULL, &ble_health_svc.attrs[2], last_payload,
+			      sizeof(last_payload));
 }

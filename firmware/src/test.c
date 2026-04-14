@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include "mock_sensors.h"
 #include "state_manager.h"
-#include "power.h"
 #include "haptics.h"
 
 LOG_MODULE_REGISTER(test_harness, LOG_LEVEL_INF);

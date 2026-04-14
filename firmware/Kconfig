@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+
+menu "VitaBand firmware"
+
+config VITABAND_BLINKY_BRINGUP
+	bool "PCB bring-up: LED blink only"
+	default n
+	help
+	  Build src/main_blinky.c instead of src/main.c. Toggles the devicetree
+	  alias led0 (Alert LED on P0.06 in app.overlay) for a first power-on test.
+	  Disable this for the full Bluetooth + sensor application.
+
+config VITABAND_NO_BLE
+	bool "Application main without Bluetooth (state machine + sensors)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	default n
+	help
+	  Same 1 Hz sensor loop and state machine as production main, but no BT
+	  stack, advertising, or GATT. Use with CONFIG_BT=n, for example:
+
+	    west build ... -- -DEXTRA_CONF_FILE=prj_no_ble.conf
+
+endmenu
+
+source "Kconfig.zephyr"
