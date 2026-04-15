@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include "mock_sensors.h"
 #include "state_manager.h"
-#include "power.h"
 #include "haptics.h"
 
 LOG_MODULE_REGISTER(test_harness, LOG_LEVEL_INF);
@@ -46,6 +45,19 @@ const char* get_state_string(vitaband_state_t state) {
     }
 }
 
+const char* get_status_string(button_status_t status) {
+     switch (status) {
+        case 0:
+            return "UNPRESSED";
+        case 1:
+            return "PRESSED";
+        case 2:
+            return "LONG_PRESS";
+        default:
+            return "UNDEFINED";
+    }
+}
+
 
 /* ========================================================================== */
 /* TEST LOOP                                                                  */
@@ -53,6 +65,7 @@ const char* get_state_string(vitaband_state_t state) {
 
 static void test_loop_thread(void *arg1, void *arg2, void *arg3)
 {
+    printk("!!! THREAD IS ALIVE: Entering Loop !!!\n");
     ARG_UNUSED(arg1);
     ARG_UNUSED(arg2);
     ARG_UNUSED(arg3);
@@ -60,81 +73,52 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
     LOG_INF("=== Test Harness Started ===");
     float base_temp = mock_read_temperature();
     uint8_t base_hr = mock_read_heart_rate();
+    
     while (test_running) {
-        /* Update scenario if active */
         mock_sensors_update_scenario();
-        
-        /* Read mock sensors */
+
+        /* 1. Get the numbers */
         uint8_t hr = mock_read_heart_rate();
         float temp = mock_read_temperature();
-        uint16_t battery_mv = mock_read_battery_voltage();
+        button_status_t status = mock_read_button_status();
         
-        /* Calculate battery percentage (for logging) */
-        uint8_t battery_pct = 0;
-        if (battery_mv >= 4200) battery_pct = 100;
-        else if (battery_mv >= 3000) {
-            battery_pct = ((battery_mv - 3000) * 100) / 1200;
-        }
-        
-        /* Evaluate device state */
+        /* 2. Calculate PSI */
         uint8_t score = calculate_risk_score(temp, base_temp, hr, base_hr);
-        current_state = determine_state(score);
-        
-        /* Check for state transition */
+        float psi_value = (float)score; // Or however your math returns PSI
+
+        /* 3. FORCE THE UPDATE */
+        // Pass the  previous state so the state machine knows where it is
+        current_state = determine_state(previous_state, psi_value, status);
+
+        /* 4. DEBUG EVERYTHING */
+        printk("DEBUG: PSI=%.1f, CurrState=%s\n", 
+(double)psi_value, get_state_string(current_state));
+
+        /* 5. The Transition Check */
         if (current_state != previous_state) {
-            test_stats.total_transitions++;
-            test_stats.last_transition_time = k_uptime_get_32();
+            printk("!!! TRANSITION DETECTED !!!\n");
             
-            LOG_WRN("=== STATE TRANSITION: %s -> %s ===",
-                    get_state_string(previous_state),
+            LOG_WRN("STATE CHANGE: %s -> %s", 
+                    get_state_string(previous_state), 
                     get_state_string(current_state));
-            LOG_INF("Vitals: HR=%u BPM, Temp=%.1f°C, Battery=%u%%",
-                    hr, temp, battery_pct);
-            
-            /* Trigger haptic alert */
-            haptics_trigger_alert(current_state);
-            
-            /* Call state transition handler */
+
             handle_state_transition(previous_state, current_state);
             
+            /* CRITICAL: Update the previous state so we don't trigger again next second */
             previous_state = current_state;
         }
-        
-        /* Update statistics */
-        switch (current_state) {
-            case STATE_OK:
-                test_stats.state_ok_count++;
-                break;
-            case STATE_WARNING:
-                test_stats.state_warning_count++;
-                break;
-            case STATE_EMERGENCY:
-                test_stats.state_emergency_count++;
-                break;
-        }
-        
-        /* Log current status every 5 seconds */
-        static uint32_t last_log_time = 0;
-        uint32_t now = k_uptime_get_32();
-        if ((now - last_log_time) >= 5000) {
-            LOG_INF("Status: %s | HR=%u | Temp=%.1f | Batt=%u%% (%umV)",
-                    get_state_string(current_state),
-                    hr, temp, battery_pct, battery_mv);
-            last_log_time = now;
-        }
-        
-        /* Sleep */
-        k_msleep(1000);  /* 1 Hz update rate */
-    }
-    
-    LOG_INF("=== Test Harness Stopped ===");
-}
 
-K_THREAD_DEFINE(test_thread, 2048, test_loop_thread, NULL, NULL, NULL, 7, 0, 0);
+        k_msleep(1000);
+    }
+}
 
 /* ========================================================================== */
 /* TEST CONTROL                                                               */
 /* ========================================================================== */
+/* Polling loop + printf/LOG + state/haptics uses more than 2 KiB in practice */
+K_THREAD_STACK_DEFINE(test_stack, 4096);
+    static struct k_thread test_thread_data;
+    static k_tid_t test_thread;
 
 void test_harness_start(void)
 {
@@ -142,21 +126,40 @@ void test_harness_start(void)
         LOG_WRN("Test already running");
         return;
     }
+
     
     LOG_INF("Starting test harness");
     
     /* Initialize mock sensors */
     mock_sensors_init();
     
-    /* Initialize state manager */
-    state_manager_init();
-    
-    /* Initialize haptics */
-    haptics_init();
-    
-    /* Start test thread */
+    /*
+     * Do not call state_manager_init() or haptics_init() here: main() already
+     * initialized them. Re-running haptics_init() reconfigures the same LED
+     * GPIO and re-inits k_work while main's blink work may still be active.
+     *
+     * Thread priority / start delay (UART + shell):
+     * The shell runs at K_LOWEST_APPLICATION_THREAD_PRIO. If the test thread
+     * uses a *higher* priority (lower numeric value, e.g. 10), it preempts
+     * the shell immediately inside k_thread_create() and the first printk()
+     * can block on the same UART mutex the shell backend still holds while
+     * finishing the command — the thread then never appears to run.
+     *
+     * Run the harness at the same priority as the shell and defer the start
+     * slightly so "test start" completes and the shell releases TX before we
+     * printk from the new thread.
+     */
     test_running = true;
-    k_thread_start(test_thread);
+
+    test_thread = k_thread_create(&test_thread_data,
+                             test_stack,
+                             K_THREAD_STACK_SIZEOF(test_stack),
+                             test_loop_thread,
+                             NULL, NULL, NULL,
+                             0,
+                             0,
+                             K_MSEC(50));
+    printk("DEBUG: test thread scheduled (starts in 50 ms).\n");
 }
 
 void test_harness_stop(void)
@@ -283,6 +286,28 @@ static int cmd_mock_temp(const struct shell *sh, size_t argc, char **argv)
     
     mock_sensors_set_temperature(temp);
     shell_print(sh, "Temperature set to %.1f°C", temp);
+    return 0;
+}
+
+static int cmd_mock_button(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_error(sh, "Usage: mock button <status>");
+        return -EINVAL;
+    }
+    
+    button_status_t status;
+
+    if (strcmp(argv[1], "PRESSED") == 0)  status = PRESSED;
+    else if (strcmp(argv[1], "UNPRESSED") == 0) status = UNPRESSED;
+    else if (strcmp(argv[1], "LONG_PRESS") == 0) status = LONG_PRESS;
+    else {
+        shell_error(sh, "Invalid status. Use PRESSED or UNPRESSED or LONG_PRESS");
+        return -EINVAL;
+    }
+    
+    mock_sensors_set_button_status(status);
+    shell_print(sh, "Button status set to %s", get_status_string(status));
     return 0;
 }
 
@@ -435,6 +460,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(mock_cmds,
     SHELL_CMD(battery, NULL, "Set battery <mv>", cmd_mock_battery),
     SHELL_CMD(mode, NULL, "Set mode <static|random|sine>", cmd_mock_mode),
     SHELL_CMD(noise, NULL, "Set noise <on|off> <amplitude>", cmd_mock_noise),
+    SHELL_CMD(button, NULL, "Set button <status>", cmd_mock_button),
     SHELL_SUBCMD_SET_END
 );
 

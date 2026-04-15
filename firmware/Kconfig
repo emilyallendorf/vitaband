@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+
+menu "VitaBand firmware"
+
+config VITABAND_BLINKY_BRINGUP
+	bool "PCB bring-up: minimal GPIO (MOTOR_EN + BUZZER_EN high)"
+	default n
+	help
+	  Link only src/main_blinky.c (no sensors, haptics, shell, BLE). Use
+	  prj_bringup.conf + app_bringup_min.overlay (motor GPIO + buzzer PWM; printk
+	  via Segger RTT on DK). Disable
+	  for the full application.
+
+config VITABAND_NO_BLE
+	bool "Application main without Bluetooth (state machine + sensors)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	default n
+	help
+	  Same 1 Hz sensor loop and state machine as production main, but no BT
+	  stack, advertising, or GATT. Use with CONFIG_BT=n, for example:
+
+	    west build ... -- -DEXTRA_CONF_FILE=prj_no_ble.conf
+
+endmenu
+
+source "Kconfig.zephyr"

@@ -1,0 +1,13 @@
+/*
+ * Bare-PCB bring-up: disable I2C and SPI sensor buses so Zephyr does not run
+ * sensor drivers before main() (floating / missing parts can stall or fault).
+ * Apply with: -DVITABAND_BRINGUP_OVERLAY=ON (see CMakeLists.txt and prj_bringup.conf).
+ */
+
+&i2c0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};

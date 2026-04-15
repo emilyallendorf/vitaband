@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+description: Maxim MAX86140 optical PPG sensor (SPI)
+
+compatible: "maxim,max86140"
+
+include: spi-device.yaml

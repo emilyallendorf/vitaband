@@ -6,7 +6,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define CONFIG_USE_MOCK_SENSORS 1
+/* Set to 0 on hardware when sensor reads should use I2C/SPI drivers only. */
+#define CONFIG_USE_MOCK_SENSORS 0
 
 // ============================================================================
 // MEASUREMENT INTERVALS
@@ -39,10 +40,10 @@
 #define BLE_CONN_INTERVAL_MS        50      // Min connection interval
 #define BLE_CONN_TIMEOUT_MS         4000    // Connection timeout
 
-// Service UUIDs (standard services)
-#define USE_STANDARD_HR_SERVICE     1       // Use standard Heart Rate Service
-#define USE_STANDARD_TEMP_SERVICE   1       // Use standard Temperature Service
-#define USE_CUSTOM_SERVICE          1       // Use custom combined service
+// BLE: custom VitaBand health service (see ble.h); no standard HRS/BAS.
+#define USE_STANDARD_HR_SERVICE     0
+#define USE_STANDARD_TEMP_SERVICE   0
+#define USE_CUSTOM_SERVICE          1
 
 // ============================================================================
 // POWER MANAGEMENT
@@ -84,7 +85,7 @@
 // ============================================================================
 // FEATURES
 // ============================================================================
-#define ENABLE_BATTERY_SERVICE      1         // BLE Battery Service
+#define ENABLE_BATTERY_SERVICE      0         // No battery level sense on hardware
 #define ENABLE_DEVICE_INFO_SERVICE  1         // BLE Device Information Service
 #define ENABLE_OTA_UPDATE           0         // Over-the-air firmware update
 #define ENABLE_RTC                  0         // Real-time clock for timestamps

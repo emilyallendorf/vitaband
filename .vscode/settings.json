@@ -1,0 +1,6 @@
+{
+    "cmake.sourceDirectory": "/Users/emilyannaallendorf/Documents/classes/18xxx/18500/vitaband/firmware",
+    "nrf-connect.applications": [
+        "${workspaceFolder}/firmware"
+    ]
+}

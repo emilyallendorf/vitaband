@@ -1,51 +1,51 @@
 /*
- * Bluetooth Low Energy Interface
- * Handles BLE communication with phone app
+ * Bluetooth LE: custom GATT health service (telemetry notify) + UUIDs for advertising.
+ * GATT = Generic Attribute Profile (BLE services/characteristics/descriptors).
  */
 
-#ifndef BLUETOOTH_H
-#define BLUETOOTH_H
+#ifndef BLE_H
+#define BLE_H
 
 #include <stdint.h>
 #include <stdbool.h>
 
-// Example
-// // BLE Service and Characteristic UUIDs
-// // Health Thermometer Service (standard)
-// #define HEALTH_TEMP_SERVICE_UUID    0x1809
-// #define TEMPERATURE_CHAR_UUID       0x2A1C
+#include <zephyr/bluetooth/uuid.h>
 
-// // Heart Rate Service (standard)
-// #define HEART_RATE_SERVICE_UUID     0x180D
-// #define HEART_RATE_CHAR_UUID        0x2A37
+#include <state_manager.h>
 
-// // Custom Service for combined data
-// #define CUSTOM_WEARABLE_SERVICE_UUID  "12345678-1234-1234-1234-123456789abc"
+/* 128-bit UUIDs (Zephyr BT_UUID_128_ENCODE byte order) */
+#define VITABAND_HEALTH_SVC_UUID_VAL                                                       \
+	BT_UUID_128_ENCODE(0x8b4cb001, 0x7a2e, 0x4c91, 0xb3d6, 0x1c0de5a1b2c3)
 
-// Data structure for BLE transmission
-typedef struct {
-    uint8_t heart_rate;
-    float temperature;
-    uint8_t acceleration;
-    uint32_t timestamp;
-} sensor_data_t;
+#define VITABAND_HEALTH_CHR_TELEMETRY_UUID_VAL                                             \
+	BT_UUID_128_ENCODE(0x8b4cb002, 0x7a2e, 0x4c91, 0xb3d6, 0x1c0de5a1b2c3)
 
-// BLE initialization and control
-void ble_init(void);
-void ble_start_advertising(void);
-void ble_stop_advertising(void);
-bool ble_is_connected(void);
+/*
+ * Canonical UUID strings (CoreBluetooth / nRF Connect):
+ *   Service:    8b4cb001-7a2e-4c91-b3d6-1c0de5a1b2c3
+ *   Telemetry:  8b4cb002-7a2e-4c91-b3d6-1c0de5a1b2c3
+ */
 
-// Data transmission
-void send_ble_data(const sensor_data_t *data);
-void send_heart_rate(uint8_t hr);
-void send_temperature(float temp);
+#define VITABAND_HEALTH_STATE_OK        0U
+#define VITABAND_HEALTH_STATE_WARNING   1U
+#define VITABAND_HEALTH_STATE_CRITICAL  2U
+#define VITABAND_HEALTH_STATE_EMERGENCY   3U
 
-// Command processing
-void process_ble_commands(void);
+#define VITABAND_HEALTH_NOTIFY_PAYLOAD_LEN 14U
 
-// Connection callbacks (implement in your application)
-void on_ble_connected(void);
-void on_ble_disconnected(void);
+/*
+ * Notification payload (14 octets, little-endian):
+ *   offset 0:       uint8  heart rate (bpm)
+ *   offset 1..4:    float  body (skin) temperature (°C)
+ *   offset 5..8:    float  ambient temperature (°C)
+ *   offset 9:       uint8  state (0=OK, 1=WARNING, 2=CRITICAL, 3=EMERGENCY)
+ *   offset 10..13:  uint32 uptime since boot (ms)
+ */
 
-#endif // BLUETOOTH_H
+bool vitaband_health_notify_enabled(void);
+
+/** @brief Notify subscribed centrals; no-op if CCC notify not enabled. */
+int vitaband_health_notify(uint8_t hr_bpm, float body_temp_c, float ambient_temp_c,
+			   vitaband_state_t state);
+
+#endif /* BLE_H */
