@@ -8,17 +8,45 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var bleManager = VitaBandBLEManager()
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        NavigationStack {
+            VStack(spacing: 0) {
+                ContactListView()
+
+                Divider()
+                    .padding(.top, 8)
+
+                VStack(spacing: 8) {
+                    Text("BLE Status")
+                        .font(.headline)
+
+                    Text(bleManager.connectionStatus)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+
+                    Text(bleManager.isConnected ? "Connected" : "Not Connected")
+                        .foregroundColor(bleManager.isConnected ? .green : .red)
+
+                    HStack {
+                        Button("Scan") {
+                            bleManager.startScan()
+                        }
+
+                        Button("Disconnect") {
+                            bleManager.disconnect()
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationBarTitleDisplayMode(.inline)
         }
-        .padding()
     }
 }
 
 #Preview {
     ContentView()
+        .environmentObject(SessionData())
 }

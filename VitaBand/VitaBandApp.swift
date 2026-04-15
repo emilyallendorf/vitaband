@@ -9,9 +9,15 @@ import SwiftUI
 
 @main
 struct VitaBandApp: App {
+    @StateObject private var sessionData = SessionData()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(sessionData)
+                .onAppear {
+                    VitaBandManager.shared.attachSession(sessionData)
+                }
         }
     }
 }
