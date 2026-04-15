@@ -3,12 +3,13 @@
 menu "VitaBand firmware"
 
 config VITABAND_BLINKY_BRINGUP
-	bool "PCB bring-up: LED blink only"
+	bool "PCB bring-up: minimal GPIO (MOTOR_EN + BUZZER_EN high)"
 	default n
 	help
-	  Build src/main_blinky.c instead of src/main.c. Toggles the devicetree
-	  alias led0 (Alert LED on P0.06 in app.overlay) for a first power-on test.
-	  Disable this for the full Bluetooth + sensor application.
+	  Link only src/main_blinky.c (no sensors, haptics, shell, BLE). Use
+	  prj_bringup.conf + app_bringup_min.overlay (motor GPIO + buzzer PWM; printk
+	  via Segger RTT on DK). Disable
+	  for the full application.
 
 config VITABAND_NO_BLE
 	bool "Application main without Bluetooth (state machine + sensors)"

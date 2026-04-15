@@ -5,10 +5,16 @@
  */
 
 #include <zephyr/kernel.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/pwm.h>
 #include <zephyr/logging/log.h>
 #include "haptics.h"
+
+#if DT_HAS_ALIAS(led0) && DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
+#define HAPTICS_HAS_LED 1
+#else
+#define HAPTICS_HAS_LED 0
+#endif
 
 LOG_MODULE_REGISTER(haptics, LOG_LEVEL_INF);
 
@@ -34,17 +40,18 @@ LOG_MODULE_REGISTER(haptics, LOG_LEVEL_INF);
  */
 
 /* ========================================================================== */
-/* GPIO/PWM CONFIGURATION                                                     */
+/* GPIO CONFIGURATION                                                         */
 /* ========================================================================== */
 
-/* LED - Simple GPIO */
+#if HAPTICS_HAS_LED
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+#endif
 
-/* Vibration Motor - PWM for intensity control */
-static const struct pwm_dt_spec vibration = PWM_DT_SPEC_GET(DT_ALIAS(vibration_motor));
+/* MOTOR_EN — GPIO; intensity maps to on/off only */
+static const struct gpio_dt_spec vibration = GPIO_DT_SPEC_GET(DT_ALIAS(vibration_motor), gpios);
 
-/* Buzzer - PWM for frequency/tone control */
-static const struct pwm_dt_spec buzzer = PWM_DT_SPEC_GET(DT_ALIAS(buzzer));
+/* BUZZER_EN — GPIO; frequency arg ignored */
+static const struct gpio_dt_spec buzzer = GPIO_DT_SPEC_GET(DT_ALIAS(buzzer), gpios);
 
 /* ========================================================================== */
 /* ALERT PATTERNS                                                             */
@@ -120,21 +127,26 @@ static haptic_pattern_t user_patterns[NUM_DEVICE_STATES];
 /* LED CONTROL                                                                */
 /* ========================================================================== */
 
-/* LED blink thread */
+#if HAPTICS_HAS_LED
 static struct k_work_delayable led_blink_work;
 static bool led_blink_active = false;
 static led_pattern_t current_led_pattern = LED_OFF;
 static bool led_state = false;
+#endif
 
 static void led_blink_handler(struct k_work *work)
 {
-    if (!led_blink_active) {
-        return;
-    }
-    
-    /* Toggle LED */
-    led_state = !led_state;
-    gpio_pin_set_dt(&led, led_state);
+#if !HAPTICS_HAS_LED
+	ARG_UNUSED(work);
+	return;
+#else
+	if (!led_blink_active) {
+		return;
+	}
+
+	/* Toggle LED */
+	led_state = !led_state;
+	gpio_pin_set_dt(&led, led_state);
     
     /* Determine next delay based on pattern */
     uint32_t delay_ms;
@@ -157,40 +169,49 @@ static void led_blink_handler(struct k_work *work)
             return;  /* Stop blinking */
     }
     
-    k_work_schedule(&led_blink_work, K_MSEC(delay_ms));
+	k_work_schedule(&led_blink_work, K_MSEC(delay_ms));
+#endif
 }
 
 static void led_set(bool on)
 {
-    gpio_pin_set_dt(&led, on);
+#if HAPTICS_HAS_LED
+	gpio_pin_set_dt(&led, on);
+#else
+	ARG_UNUSED(on);
+#endif
 }
 
 static void led_start_pattern(led_pattern_t pattern)
 {
-    led_blink_active = false;
-    k_work_cancel_delayable(&led_blink_work);
-    
-    current_led_pattern = pattern;
-    
-    switch (pattern) {
-        case LED_OFF:
-            led_set(false);
-            break;
-            
-        case LED_STEADY:
-            led_set(true);
-            break;
-            
-        case LED_SLOW_BLINK:
-        case LED_FAST_BLINK:
-        case LED_PULSE:
-            led_blink_active = true;
-            led_state = true;
-            led_set(true);
-            k_work_schedule(&led_blink_work, 
-                           K_MSEC(pattern == LED_FAST_BLINK ? 250 : 1000));
-            break;
-    }
+#if HAPTICS_HAS_LED
+	led_blink_active = false;
+	k_work_cancel_delayable(&led_blink_work);
+
+	current_led_pattern = pattern;
+
+	switch (pattern) {
+	case LED_OFF:
+		led_set(false);
+		break;
+
+	case LED_STEADY:
+		led_set(true);
+		break;
+
+	case LED_SLOW_BLINK:
+	case LED_FAST_BLINK:
+	case LED_PULSE:
+		led_blink_active = true;
+		led_state = true;
+		led_set(true);
+		k_work_schedule(&led_blink_work,
+				K_MSEC(pattern == LED_FAST_BLINK ? 250 : 1000));
+		break;
+	}
+#else
+	ARG_UNUSED(pattern);
+#endif
 }
 
 /* ========================================================================== */
@@ -202,21 +223,17 @@ static struct k_work_delayable vibration_stop_work;
 
 static void vibration_stop_handler(struct k_work *work)
 {
-    /* Turn off motor */
-    pwm_set_pulse_dt(&vibration, 0);
-    LOG_DBG("Vibration stopped");
+	ARG_UNUSED(work);
+	(void)gpio_pin_set_dt(&vibration, 0);
+	LOG_DBG("Vibration stopped");
 }
 
 static void vibration_set_intensity(uint8_t intensity_percent)
 {
-    if (intensity_percent > 100) {
-        intensity_percent = 100;
-    }
-    
-    /* Convert percentage to PWM duty cycle */
-    uint32_t pulse_ns = (vibration.period * intensity_percent) / 100;
-    
-    pwm_set_pulse_dt(&vibration, pulse_ns);
+	if (intensity_percent > 100) {
+		intensity_percent = 100;
+	}
+	(void)gpio_pin_set_dt(&vibration, intensity_percent > 0 ? 1 : 0);
 }
 
 static void vibration_start(uint8_t intensity, uint16_t duration_ms)
@@ -249,26 +266,17 @@ static struct k_work_delayable buzzer_stop_work;
 
 static void buzzer_stop_handler(struct k_work *work)
 {
-    /* Turn off buzzer */
-    pwm_set_pulse_dt(&buzzer, 0);
-    LOG_DBG("Buzzer stopped");
+	(void)gpio_pin_set_dt(&buzzer, 0);
+	LOG_DBG("Buzzer stopped");
 }
 
 static void buzzer_set_tone(uint16_t frequency_hz)
 {
-    if (frequency_hz == 0) {
-        pwm_set_pulse_dt(&buzzer, 0);
-        return;
-    }
-    
-    /* Calculate period from frequency */
-    uint32_t period_ns = NSEC_PER_SEC / frequency_hz;
-    
-    /* 50% duty cycle for piezo buzzer */
-    uint32_t pulse_ns = period_ns / 2;
-    
-    /* Set PWM with new frequency */
-    pwm_set_dt(&buzzer, period_ns, pulse_ns);
+	if (frequency_hz == 0) {
+		(void)gpio_pin_set_dt(&buzzer, 0);
+		return;
+	}
+	(void)gpio_pin_set_dt(&buzzer, 1);
 }
 
 static void buzzer_start(uint16_t frequency_hz, uint16_t duration_ms)
@@ -300,36 +308,48 @@ int haptics_init(void)
 {
     int ret;
     
-    LOG_INF("Initializing haptics system");
+	LOG_INF("Initializing haptics system");
+
+#if HAPTICS_HAS_LED
+	if (!gpio_is_ready_dt(&led)) {
+		LOG_ERR("LED GPIO not ready");
+		return -ENODEV;
+	}
+
+	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
+	if (ret != 0) {
+		LOG_ERR("Failed to configure LED: %d", ret);
+		return ret;
+	}
+#endif
+
+	if (!gpio_is_ready_dt(&vibration)) {
+		LOG_ERR("Motor enable GPIO not ready");
+		return -ENODEV;
+	}
+	ret = gpio_pin_configure_dt(&vibration, GPIO_OUTPUT_INACTIVE);
+	if (ret != 0) {
+		LOG_ERR("Motor GPIO configure failed: %d", ret);
+		return ret;
+	}
     
-    /* Initialize LED */
-    if (!device_is_ready(led.port)) {
-        LOG_ERR("LED GPIO not ready");
+    /* Buzzer enable GPIO */
+    if (!gpio_is_ready_dt(&buzzer)) {
+        LOG_ERR("Buzzer GPIO not ready");
         return -ENODEV;
     }
-    
-    ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
+    ret = gpio_pin_configure_dt(&buzzer, GPIO_OUTPUT_INACTIVE);
     if (ret != 0) {
-        LOG_ERR("Failed to configure LED: %d", ret);
+        LOG_ERR("Buzzer GPIO configure failed: %d", ret);
         return ret;
     }
     
-    /* Initialize vibration motor PWM */
-    if (!device_is_ready(vibration.dev)) {
-        LOG_ERR("Vibration motor PWM not ready");
-        return -ENODEV;
-    }
-    
-    /* Initialize buzzer PWM */
-    if (!device_is_ready(buzzer.dev)) {
-        LOG_ERR("Buzzer PWM not ready");
-        return -ENODEV;
-    }
-    
-    /* Initialize work items */
-    k_work_init_delayable(&led_blink_work, led_blink_handler);
-    k_work_init_delayable(&vibration_stop_work, vibration_stop_handler);
-    k_work_init_delayable(&buzzer_stop_work, buzzer_stop_handler);
+	/* Initialize work items */
+#if HAPTICS_HAS_LED
+	k_work_init_delayable(&led_blink_work, led_blink_handler);
+#endif
+	k_work_init_delayable(&vibration_stop_work, vibration_stop_handler);
+	k_work_init_delayable(&buzzer_stop_work, buzzer_stop_handler);
     
     /* Copy default patterns to user settings */
     memcpy(user_patterns, default_patterns, sizeof(default_patterns));

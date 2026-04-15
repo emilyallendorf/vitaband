@@ -1,186 +1,72 @@
-// #include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
-// #include <zephyr/dt-bindings/pwm/pwm.h>
-// #include <zephyr/dt-bindings/adc/adc.h>
-
-// / {
-//     aliases {
-//         /* These names must match what you use in DT_ALIAS() */
-//         vibration-motor = &vibration_motor; 
-//         buzzer = &buzzer;
-//         led0 = &led0;
-//     };
-
-//     leds {
-//         compatible = "gpio-leds";
-//         led0: led_0 {
-//             gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
-//             label = "Alert LED";
-//         };
-//     };
-
-//     pwmleds {
-//         compatible = "pwm-leds";
-//         vibration_motor: vibration_motor {
-//             pwms = <&pwm0 0 1000 PWM_POLARITY_NORMAL>;
-//         };
-//         buzzer: buzzer {
-//             pwms = <&pwm0 1 250 PWM_POLARITY_NORMAL>;
-//         };
-//     };
-// };
-
-
-
-// &i2c0 {
-//     status = "okay";
-//     pinctrl-0 = <&i2c0_default>;
-//     pinctrl-1 = <&i2c0_default>;
-//     pinctrl-names = "default", "sleep";
-
-//     tmp117: tmp117@48 {
-//         compatible = "ti,tmp117";
-//         reg = <0x48>;
-//         label = "TMP117";
-//     };
-
-//     sht3xdis: sht3x@44 {
-//         compatible = "sensirion,sht3xd"; /* Standard Zephyr compatible for SHT3x */
-//         reg = <0x44>; /* Check if your addr is 0x44 or 0x45 */
-//     };
-// };
-
-// &pwm0 {
-//     status = "okay";
-//     pinctrl-0 = <&pwm0_default>;
-//     pinctrl-1 = <&pwm0_default>;
-//     pinctrl-names = "default", "sleep";
-// };
-
-// // &spi1 {
-// //     compatible = "nordic,nrf-spim";
-
-// //     status = "okay";
-
-// //     pinctrl-0 = <&spi1_default>;
-// //     pinctrl-1 = <&spi1_sleep>;
-// //     pinctrl-names = "default", "sleep";
-
-// //     cs-gpios = <&gpio0 25 GPIO_ACTIVE_LOW>;
-
-// //     #address-cells = <1>;
-// //     #size-cells = <0>;
-
-// //     max86140: max86140@0 {
-// //         compatible = "spi-device";
-// //         reg = <0>;
-// //         spi-max-frequency = <1000000>;
-// //         status = "okay";
-// //     };
-
-// // };
-
-// &pinctrl {
-//     // spi01_default: spi1_default {
-//     //     group1 {
-//     //         psels = <NRF_PSEL(SPIM_SCK, 0, 31)>,
-//     //                 <NRF_PSEL(SPIM_MOSI, 0, 30)>,
-//     //                 <NRF_PSEL(SPIM_MISO, 0, 29)>;
-//     //     };
-//     // };
-
-//     i2c0_default: i2c0_default {
-//         group1 {
-//             psels = <NRF_PSEL(TWIM_SDA, 0, 27)>,
-//                     <NRF_PSEL(TWIM_SCL, 0, 26)>;
-//         };
-//     };
-
-//     // spi1_sleep: spi1_sleep {
-//     //     group1 {
-//     //         psels = <NRF_PSEL(SPIM_SCK, 0, 31)>,
-//     //                 <NRF_PSEL(SPIM_MOSI, 0, 30)>,
-//     //                 <NRF_PSEL(SPIM_MISO, 0, 29)>;
-//     //         low-power-enable;
-//     //     };
-//     // };
-
-//     pwm0_default: pwm0_default {
-//         group1 {
-//             psels = <NRF_PSEL(PWM_OUT0, 0, 7)>,
-//                     <NRF_PSEL(PWM_OUT1, 0, 8)>;
-//         };
-//     };
-// };
-
+/*
+ * VitaBand — application overlay (do NOT #include the SoC .dtsi here; the board
+ * target already provides it. Including nrf52840_qiaaa.dtsi breaks the merged
+ * tree and causes errors like __device_dts_ord_N undeclared in C sources.)
+ *
+ * Pin assignment — MDBT50Q-1MV2 (nRF52840):
+ *   MOTOR_EN  P0.04   BUZZER_EN P0.05   HR_INT P0.06   BUTTON P0.17
+ *   I2C SCL P0.26 / SDA P0.27   SPI as in &spi1
+ *
+ * UART0: TX/RX moved off P0.06 (HR_INT). On nRF52840 DK, P0.11 is Button 1 —
+ * do not use RX on P0.11 if you need sw0 on the DK.
+ */
 
 #include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
-#include <zephyr/dt-bindings/pwm/pwm.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
-
-/*
- * Pin assignment (from schematic MDBT50Q-1MV2):
- *
- *   BUTTON      → P0.17   (ext. 10kΩ pull-up R9, active-LOW)
- *   MOTOR_EN    → P0.04   (PWM ch0)
- *   BUZZER_EN   → P0.03   (PWM ch1)
- *   HR_INT_3V3  → P0.05   (MAX86140 INT, active-low)
- *   SDO_3V3     → P0.13   (SPI MISO)
- *   CSB_3V3     → P0.14   (SPI CS)
- *   SCLK_3V3    → P0.15   (SPI SCK)
- *   SDI_3V3     → P0.16   (SPI MOSI)
- *   SCL         → P0.25   (I2C)
- *   SDA         → P0.26   (I2C)
- */
+#include <zephyr/dt-bindings/gpio/nordic-nrf-gpio.h>
 
 / {
     aliases {
+        /* haptics.c uses led0 only if status "okay"; stub keeps P0.06 free (HR_INT). */
+        led0 = &vitaband_led0_placeholder;
         vibration-motor  = &vibration_motor;
-        buzzer           = &buzzer;
-        led0             = &led0;
+        buzzer           = &buzzer_en;
         emergency-button = &emergency_button;
     };
 
     leds {
-        compatible = "gpio-leds";
-        led0: led_0 {
+        vitaband_led0_placeholder: vitaband_led0_placeholder {
+            status = "disabled";
             gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
-            label = "Alert LED";
+            label = "No discrete LED (P0.06 is HR_INT)";
         };
     };
 
-    pwmleds {
-        compatible = "pwm-leds";
+    haptic_gpios {
+        compatible = "gpio-leds";
         vibration_motor: vibration_motor {
-            pwms = <&pwm0 0 1000 PWM_POLARITY_NORMAL>;
+            gpios = <&gpio0 4 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH | NRF_GPIO_DRIVE_H0H1)>;
+            label = "MOTOR_EN";
         };
-        buzzer: buzzer {
-            pwms = <&pwm0 1 250 PWM_POLARITY_NORMAL>;
+        buzzer_en: buzzer_en {
+            gpios = <&gpio0 5 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH | NRF_GPIO_DRIVE_H0H1)>;
+            label = "BUZZER_EN";
         };
     };
 
-    /*
-     * Emergency button on P0.17.
-     * R9 (10kΩ) already pulls to 3.3V — do NOT add GPIO_PULL_UP.
-     */
     buttons {
         compatible = "gpio-keys";
         emergency_button: emergency_button {
-            gpios = <&gpio0 17 GPIO_ACTIVE_LOW>;
+            gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
             label = "Emergency Button";
         };
     };
 };
 
+/* Free P0.04/P0.05 from analog input when driving haptics as GPIO */
+&adc {
+    status = "disabled";
+};
+
 &i2c0 {
     status = "okay";
     pinctrl-0 = <&i2c0_default>;
-    pinctrl-1 = <&i2c0_default>;
+    pinctrl-1 = <&i2c0_sleep>;
     pinctrl-names = "default", "sleep";
 
     tmp117: tmp117@48 {
         compatible = "ti,tmp117";
         reg = <0x48>;
-        label = "TMP117";
     };
 
     sht3xdis: sht3x@44 {
@@ -193,32 +79,48 @@
     compatible = "nordic,nrf-spim";
     status = "okay";
     pinctrl-0 = <&spi1_default>;
-    pinctrl-1 = <&spi1_default>;
+    pinctrl-1 = <&spi1_sleep>;
     pinctrl-names = "default", "sleep";
     cs-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
-    #address-cells = <1>;
-    #size-cells = <0>;
 
     max86140: max86140@0 {
         compatible = "maxim,max86140";
         reg = <0>;
-        spi-max-frequency = <4000000>;   /* datasheet max: 4 MHz (Rev.5) */
-        status = "okay";
+        spi-max-frequency = <4000000>;
     };
 };
 
-&pwm0 {
-    status = "okay";
-    pinctrl-0 = <&pwm0_default>;
-    pinctrl-1 = <&pwm0_default>;
-    pinctrl-names = "default", "sleep";
-};
-
 &pinctrl {
+    uart0_default: uart0_default {
+        group1 {
+            psels = <NRF_PSEL(UART_TX, 0, 8)>;
+        };
+        group2 {
+            psels = <NRF_PSEL(UART_RX, 0, 11)>;
+            bias-pull-up;
+        };
+    };
+
+    uart0_sleep: uart0_sleep {
+        group1 {
+            psels = <NRF_PSEL(UART_TX, 0, 8)>,
+                    <NRF_PSEL(UART_RX, 0, 11)>;
+            low-power-enable;
+        };
+    };
+
     i2c0_default: i2c0_default {
         group1 {
-            psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
-                    <NRF_PSEL(TWIM_SCL, 0, 25)>;
+            psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+                    <NRF_PSEL(TWIM_SDA, 0, 27)>;
+        };
+    };
+
+    i2c0_sleep: i2c0_sleep {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+                    <NRF_PSEL(TWIM_SDA, 0, 27)>;
+            low-power-enable;
         };
     };
 
@@ -230,10 +132,12 @@
         };
     };
 
-    pwm0_default: pwm0_default {
+    spi1_sleep: spi1_sleep {
         group1 {
-            psels = <NRF_PSEL(PWM_OUT0, 0, 4)>,
-                    <NRF_PSEL(PWM_OUT1, 0, 3)>;
+            psels = <NRF_PSEL(SPIM_SCK,  0, 15)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 16)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 13)>;
+            low-power-enable;
         };
     };
 };
