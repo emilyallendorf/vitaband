@@ -4,7 +4,7 @@
  * tree and causes errors like __device_dts_ord_N undeclared in C sources.)
  *
  * Pin assignment — MDBT50Q-1MV2 (nRF52840):
- *   MOTOR_EN  P0.04   BUZZER_EN P0.05   HR_INT P0.06   BUTTON P0.17
+ *   MOTOR_EN  P0.04 (GPIO)   BUZZER_EN P0.05 (pwm0 OUT0)   HR_INT P0.06   BUTTON P0.17
  *   I2C SCL P0.26 / SDA P0.27   SPI as in &spi1
  *
  * UART0: TX/RX moved off P0.06 (HR_INT). On nRF52840 DK, P0.11 is Button 1 —
@@ -14,13 +14,15 @@
 #include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/gpio/nordic-nrf-gpio.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
 
 / {
     aliases {
         /* haptics.c uses led0 only if status "okay"; stub keeps P0.06 free (HR_INT). */
         led0 = &vitaband_led0_placeholder;
         vibration-motor  = &vibration_motor;
-        buzzer           = &buzzer_en;
+        /* PWM consumer node (pwms) — not gpio-leds; haptics.c uses pwm_dt_spec */
+        buzzer           = &buzzer_en_pwm;
         emergency-button = &emergency_button;
     };
 
@@ -38,10 +40,17 @@
             gpios = <&gpio0 4 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH | NRF_GPIO_DRIVE_H0H1)>;
             label = "MOTOR_EN";
         };
-        buzzer_en: buzzer_en {
-            gpios = <&gpio0 5 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH | NRF_GPIO_DRIVE_H0H1)>;
-            label = "BUZZER_EN";
-        };
+    };
+
+    /* Piezo buzzer enable: hardware PWM on P0.05 (runtime frequency via pwm_set_dt). */
+    buzzer_en_pwm: buzzer_en_pwm {
+        pwms = <&pwm0 0 PWM_NSEC(250000) PWM_POLARITY_NORMAL>;
+        label = "BUZZER_EN";
+    };
+
+    /* DK on-board pwm-leds also uses pwm0 ch0; disable when BUZZER uses OUT0 @ P0.05 */
+    pwmleds {
+        status = "disabled";
     };
 
     buttons {
@@ -53,7 +62,7 @@
     };
 };
 
-/* Free P0.04/P0.05 from analog input when driving haptics as GPIO */
+/* Free P0.04/P0.05 from ADC when used for haptics (motor GPIO + buzzer PWM) */
 &adc {
     status = "disabled";
 };
@@ -140,4 +149,25 @@
             low-power-enable;
         };
     };
+
+    pwm0_buzzer: pwm0_buzzer {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+            nordic,drive-mode = <NRF_DRIVE_H0H1>;
+        };
+    };
+
+    pwm0_buzzer_sleep: pwm0_buzzer_sleep {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+            low-power-enable;
+        };
+    };
+};
+
+&pwm0 {
+    status = "okay";
+    pinctrl-0 = <&pwm0_buzzer>;
+    pinctrl-1 = <&pwm0_buzzer_sleep>;
+    pinctrl-names = "default", "sleep";
 };

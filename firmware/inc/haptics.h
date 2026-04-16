@@ -59,7 +59,7 @@ typedef struct {
 /**
  * @brief Initialize haptics system
  * 
- * Sets up GPIO for LED and PWM for vibration motor and buzzer.
+ * Sets up GPIO for LED and motor; buzzer uses hardware PWM (see app.overlay).
  * Loads default alert patterns.
  * 
  * @return 0 on success, negative errno on failure

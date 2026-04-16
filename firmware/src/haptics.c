@@ -7,6 +7,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/pwm.h>
 #include <zephyr/logging/log.h>
 #include "haptics.h"
 
@@ -40,7 +41,7 @@ LOG_MODULE_REGISTER(haptics, LOG_LEVEL_INF);
  */
 
 /* ========================================================================== */
-/* GPIO CONFIGURATION                                                         */
+/* GPIO / PWM CONFIGURATION (see app.overlay aliases)                         */
 /* ========================================================================== */
 
 #if HAPTICS_HAS_LED
@@ -50,8 +51,8 @@ static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 /* MOTOR_EN — GPIO; intensity maps to on/off only */
 static const struct gpio_dt_spec vibration = GPIO_DT_SPEC_GET(DT_ALIAS(vibration_motor), gpios);
 
-/* BUZZER_EN — GPIO; frequency arg ignored */
-static const struct gpio_dt_spec buzzer = GPIO_DT_SPEC_GET(DT_ALIAS(buzzer), gpios);
+/* BUZZER_EN — pwm0 channel 0 on P0.05; frequency from pwm_set_dt */
+static const struct pwm_dt_spec buzzer = PWM_DT_SPEC_GET(DT_ALIAS(buzzer));
 
 /* ========================================================================== */
 /* ALERT PATTERNS                                                             */
@@ -266,17 +267,37 @@ static struct k_work_delayable buzzer_stop_work;
 
 static void buzzer_stop_handler(struct k_work *work)
 {
-	(void)gpio_pin_set_dt(&buzzer, 0);
+	(void)pwm_set_pulse_dt(&buzzer, 0U);
 	LOG_DBG("Buzzer stopped");
 }
 
 static void buzzer_set_tone(uint16_t frequency_hz)
 {
-	if (frequency_hz == 0) {
-		(void)gpio_pin_set_dt(&buzzer, 0);
+	int ret;
+
+	if (frequency_hz == 0U) {
+		ret = pwm_set_pulse_dt(&buzzer, 0U);
+		if (ret != 0) {
+			LOG_DBG("buzzer pwm off: %d", ret);
+		}
 		return;
 	}
-	(void)gpio_pin_set_dt(&buzzer, 1);
+
+	/* Practical range for piezo; keeps period_ns in range for the driver */
+	if (frequency_hz < 50U) {
+		frequency_hz = 50U;
+	}
+	if (frequency_hz > 10000U) {
+		frequency_hz = 10000U;
+	}
+
+	uint32_t period_ns = (uint32_t)(1000000000ULL / (uint64_t)frequency_hz);
+	uint32_t pulse_ns = period_ns / 2U;
+
+	ret = pwm_set_dt(&buzzer, period_ns, pulse_ns);
+	if (ret != 0) {
+		LOG_WRN("pwm_set_dt failed: %d (hz=%u)", ret, frequency_hz);
+	}
 }
 
 static void buzzer_start(uint16_t frequency_hz, uint16_t duration_ms)
@@ -333,14 +354,13 @@ int haptics_init(void)
 		return ret;
 	}
     
-    /* Buzzer enable GPIO */
-    if (!gpio_is_ready_dt(&buzzer)) {
-        LOG_ERR("Buzzer GPIO not ready");
+    if (!pwm_is_ready_dt(&buzzer)) {
+        LOG_ERR("Buzzer PWM not ready");
         return -ENODEV;
     }
-    ret = gpio_pin_configure_dt(&buzzer, GPIO_OUTPUT_INACTIVE);
+    ret = pwm_set_pulse_dt(&buzzer, 0U);
     if (ret != 0) {
-        LOG_ERR("Buzzer GPIO configure failed: %d", ret);
+        LOG_ERR("Buzzer PWM initial off failed: %d", ret);
         return ret;
     }
     

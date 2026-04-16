@@ -19,6 +19,7 @@
 #define PWM_DEV     DEVICE_DT_GET(DT_NODELABEL(pwm0))
 
 #define MOTOR_PIN 4U
+#define BUZZER_PIN 5U
 #define PWM_CH    0U
 
 /* 4 kHz square-ish wave: period 250 µs, 50% duty */
@@ -58,16 +59,25 @@ int main(void)
 	}
 	printk("OK: P0.04 motor pin GPIO_OUTPUT_HIGH\n");
 
+	// ret = gpio_pin_configure(HAPTIC_PORT, BUZZER_PIN, GPIO_OUTPUT_HIGH);
+	// if (ret != 0) {
+	// 	printk("ERROR: motor GPIO configure failed: %d\n", ret);
+	// 	return 0;
+	// }
+	// printk("OK: P0.04 motor pin GPIO_OUTPUT_HIGH\n");
+
+	// k_sleep(K_MSEC(5000)); /* wait for the motor to spin up before enabling the buzzer */
+
 	ret = pwm_set(PWM_DEV, PWM_CH, BUZZ_PERIOD_NS, BUZZ_PULSE_NS, PWM_POLARITY_NORMAL);
 	if (ret != 0) {
 		printk("ERROR: pwm_set failed: %d (period_ns=%u pulse_ns=%u ch=%u)\n", ret,
 		       BUZZ_PERIOD_NS, BUZZ_PULSE_NS, PWM_CH);
 		return 0;
 	}
-	printk("OK: pwm_set ch%u ~4 kHz (period %u ns, pulse %u ns)\n", PWM_CH,
-	       BUZZ_PERIOD_NS, BUZZ_PULSE_NS);
-	printk("Probe **MCU P0.05** (UART RTS on DK schematics) — not the green LED (**P0.13**).\n");
-	printk("Idle forever — PWM should run until reset.\n");
+	// printk("OK: pwm_set ch%u ~4 kHz (period %u ns, pulse %u ns)\n", PWM_CH,
+	//        BUZZ_PERIOD_NS, BUZZ_PULSE_NS);
+	// printk("Probe **MCU P0.05** (UART RTS on DK schematics) — not the green LED (**P0.13**).\n");
+	// printk("Idle forever — PWM should run until reset.\n");
 
 	for (;;) {
 		k_sleep(K_FOREVER);
