@@ -475,6 +475,11 @@ void haptics_buzzer_beep(uint16_t frequency_hz, uint16_t duration_ms)
     buzzer_start(frequency_hz, duration_ms);
 }
 
+void haptics_buzzer_stop(void)
+{
+	buzzer_stop();
+}
+
 void haptics_stop_all(void)
 {
     led_start_pattern(LED_OFF);

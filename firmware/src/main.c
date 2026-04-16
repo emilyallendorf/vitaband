@@ -307,6 +307,7 @@ int main(void)
 	temperature_sensor_init(AMBIENT);
 	heart_rate_sensor_init();
 	button_init();
+
 	state_manager_init();
 
 	k_msleep(500);
