@@ -1,0 +1,73 @@
+/*
+ * I2C0: SDA P0.26 / SCL P0.27 (nRF52840 DK Arduino header).
+ * SHT3x-DIS @ 0x44 (ambient).
+ * printk: Segger RTT (prj_ambient_pwm.conf) — uart0 disabled like bring-up.
+ *
+ * west build ... -DCONF_FILE=prj_ambient_pwm.conf -DDTC_OVERLAY_FILE=app_ambient_pwm.overlay
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pinctrl {
+	i2c0_ambient: i2c0_ambient {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
+				<NRF_PSEL(TWIM_SCL, 0, 27)>;
+		};
+	};
+
+	i2c0_ambient_sleep: i2c0_ambient_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
+				<NRF_PSEL(TWIM_SCL, 0, 27)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	pinctrl-0 = <&i2c0_ambient>;
+	pinctrl-1 = <&i2c0_ambient_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+
+	sht3xdis: sht3x@44 {
+		compatible = "sensirion,sht3xd";
+		reg = <0x44>;
+	};
+};

@@ -11,9 +11,28 @@ config VITABAND_BLINKY_BRINGUP
 	  via Segger RTT on DK). Disable
 	  for the full application.
 
+config VITABAND_TMP102_PWM_DEMO
+	bool "TMP102 on DK I2C -> PWM duty (scope, debug SHT3x path)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	default n
+	help
+	  SparkFun TMP102 @ 0x48 on nRF52840 DK Arduino I2C (SCL P0.27 / SDA P0.26).
+	  prj_tmp102_pwm.conf + app_tmp102_pwm.overlay.
+
+config VITABAND_AMBIENT_PWM_DEMO
+	bool "SHT3x ambient: printk temp/RH on Segger RTT (I2C)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_TMP102_PWM_DEMO
+	default n
+	help
+	  Link main_ambient_pwm.c + SHT3x driver only. Prints temperature and humidity
+	  every 500 ms via RTT. Use prj_ambient_pwm.conf and app_ambient_pwm.overlay.
+
 config VITABAND_NO_BLE
 	bool "Application main without Bluetooth (state machine + sensors)"
 	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_TMP102_PWM_DEMO
 	default n
 	help
 	  Same 1 Hz sensor loop and state machine as production main, but no BT

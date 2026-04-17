@@ -11,8 +11,23 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(vitaband_firmware)
 
 if(CONFIG_VITABAND_BLINKY_BRINGUP)
-  target_sources(app PRIVATE src/main_blinky.c)
+  message(STATUS "VitaBand: main = src/main_blinky.c (CONFIG_VITABAND_BLINKY_BRINGUP=y)")
+  target_sources(app PRIVATE
+    src/main_blinky.c)
+elseif(CONFIG_VITABAND_AMBIENT_PWM_DEMO)
+  message(STATUS "VitaBand: main = src/main_ambient_pwm.c (ambient SHT3x printk demo)")
+  target_sources(app PRIVATE
+    src/main_ambient_pwm.c
+    drivers/src/sht3x-dis.c
+  )
+elseif(CONFIG_VITABAND_TMP102_PWM_DEMO)
+  message(STATUS "VitaBand: main = src/main_tmp102_pwm.c (CONFIG_VITABAND_TMP102_PWM_DEMO=y)")
+  target_sources(app PRIVATE
+    src/main_tmp102_pwm.c
+    drivers/src/tmp102.c
+  )
 else()
+  message(STATUS "VitaBand: main = src/main.c (full application)")
   target_sources(app PRIVATE
     src/main.c
     src/power.c

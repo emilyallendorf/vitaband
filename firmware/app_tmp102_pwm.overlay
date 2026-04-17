@@ -1,0 +1,93 @@
+/*
+ * nRF52840 DK + SparkFun TMP102 on Arduino I2C:
+ *   SCL = P0.27, SDA = P0.26 (matches Nordic DK default TWIM pinctrl).
+ * TMP102 default I2C address 0x48 (ADD0 = GND on SparkFun breakout).
+ *
+ * pwm0 OUT0 → P0.05 (~10 kHz duty ∝ temp in main_tmp102_pwm.c).
+ *
+ * west build ... -DCONF_FILE=prj_tmp102_pwm.conf -DDTC_OVERLAY_FILE=app_tmp102_pwm.overlay
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+/ {
+    chosen {
+        /delete-property/ zephyr,console;
+        /delete-property/ zephyr,shell-uart;
+        /delete-property/ zephyr,uart-mcumgr;
+        /delete-property/ zephyr,bt-mon-uart;
+        /delete-property/ zephyr,bt-c2h-uart;
+    };
+
+    pwmleds {
+        status = "disabled";
+    };
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pinctrl {
+	/* DK Arduino I2C: SCL P0.27, SDA P0.26 */
+	i2c0_tmp102: i2c0_tmp102 {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 27)>,
+				<NRF_PSEL(TWIM_SDA, 0, 26)>;
+		};
+	};
+
+	i2c0_tmp102_sleep: i2c0_tmp102_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 27)>,
+				<NRF_PSEL(TWIM_SDA, 0, 26)>;
+			low-power-enable;
+		};
+	};
+
+	pwm0_scope: pwm0_scope {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+
+	pwm0_scope_sleep: pwm0_scope_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	pinctrl-0 = <&i2c0_tmp102>;
+	pinctrl-1 = <&i2c0_tmp102_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+	/* TMP102 @ 0x48 — address is hardcoded in drivers/src/tmp102.c */
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_scope>;
+	pinctrl-1 = <&pwm0_scope_sleep>;
+	pinctrl-names = "default", "sleep";
+};
