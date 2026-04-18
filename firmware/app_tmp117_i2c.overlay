@@ -1,11 +1,15 @@
 /*
- * I2C0: VitaBand PCB TWIM — **SCL P0.27, SDA P0.26** (same net order as app_tmp117_i2c.overlay).
- * For nRF52840 DK jumpers labeled from older docs (SCL=P0.26, SDA=P0.27), append AFTER this file:
- *   app_ambient_pwm_i2c_dkswap.overlay
- * SHT3x-DIS @ 0x45 (ADDR → VDD; use 0x44 if ADDR → GND).
- * printk: Segger RTT (prj_ambient_pwm.conf) — uart0 disabled like bring-up.
+ * TMP117 on I2C0 — VitaBand PCB: **SCL=P0.27, SDA=P0.26** (matches psels below).
+ * Default **reg = 0x49** (ADD0 → V+). Change to 0x48 if ADD0→GND, 0x4A/0x4B per TI table.
  *
- * west build ... -DCONF_FILE=prj_ambient_pwm.conf -DDTC_OVERLAY_FILE=app_ambient_pwm.overlay
+ * Devicetree uses `compatible = "nordic,nrf-twim"` so Zephyr selects the TWIM driver (do not set
+ * CONFIG_I2C_NRFX_TWIM in prj — it is Kconfig-hidden).
+ *
+ * nRF52840 DK without VitaBand wiring — append **second** overlay:
+ *   app_tmp117_i2c_dkswap.overlay
+ *
+ * west build -b nrf52840dk/nrf52840 firmware -d firmware/build -p always -- \
+ *   -DCONF_FILE=prj_tmp117_i2c.conf -DDTC_OVERLAY_FILE=app_tmp117_i2c.overlay
  */
 
 #include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
@@ -36,7 +40,6 @@
 	status = "disabled";
 };
 
-/* nRF52: SPI0 default pinctrl can overlap Arduino I2C pins — keep off for I2C0 bring-up */
 &spi0 {
 	status = "disabled";
 };
@@ -50,7 +53,7 @@
 };
 
 &pinctrl {
-	i2c0_ambient: i2c0_ambient {
+	i2c0_tmp117: i2c0_tmp117 {
 		group1 {
 			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
 				<NRF_PSEL(TWIM_SDA, 0, 27)>;
@@ -58,7 +61,7 @@
 		};
 	};
 
-	i2c0_ambient_sleep: i2c0_ambient_sleep {
+	i2c0_tmp117_sleep: i2c0_tmp117_sleep {
 		group1 {
 			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
 				<NRF_PSEL(TWIM_SDA, 0, 27)>;
@@ -69,15 +72,14 @@
 
 &i2c0 {
 	status = "okay";
-	/delete-property/ compatible;
 	compatible = "nordic,nrf-twim";
-	pinctrl-0 = <&i2c0_ambient>;
-	pinctrl-1 = <&i2c0_ambient_sleep>;
+	pinctrl-0 = <&i2c0_tmp117>;
+	pinctrl-1 = <&i2c0_tmp117_sleep>;
 	pinctrl-names = "default", "sleep";
 	clock-frequency = <100000>;
 
-	sht3xdis: sht3xdis@45 {
-		compatible = "sensirion,sht3xd";
-		reg = <0x45>;
+	tmp117: tmp117@49 {
+		compatible = "ti,tmp117";
+		reg = <0x49>;
 	};
 };

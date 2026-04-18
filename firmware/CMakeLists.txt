@@ -12,16 +12,31 @@ if(CONFIG_VITABAND_BLINKY_BRINGUP)
   message(STATUS "VitaBand: main = src/main_blinky.c (CONFIG_VITABAND_BLINKY_BRINGUP=y)")
   target_sources(app PRIVATE
     src/main_blinky.c)
+elseif(CONFIG_VITABAND_PWM_I2C_PIN_SCOPE)
+  message(STATUS "VitaBand: main = src/main_pwm_i2c_pins_scope.c (PWM on P0.26/P0.27)")
+  target_sources(app PRIVATE
+    src/main_pwm_i2c_pins_scope.c)
+elseif(CONFIG_VITABAND_MAX86140_HR_DEMO)
+  message(STATUS "VitaBand: main = src/main_max86140_hr.c (MAX86140 SPI HR)")
+  target_sources(app PRIVATE
+    src/main_max86140_hr.c
+    drivers/src/max86140.c
+  )
 elseif(CONFIG_VITABAND_AMBIENT_PWM_DEMO)
-  message(STATUS "VitaBand: main = src/main_ambient_pwm.c (ambient SHT3x printk demo)")
+  message(STATUS "VitaBand: main = src/main_ambient_pwm.c (ambient SHT3XD sensor API demo)")
   target_sources(app PRIVATE
     src/main_ambient_pwm.c
-    drivers/src/sht3x-dis.c
   )
 elseif(CONFIG_VITABAND_SPARKFUN_TMP102_DK)
   message(STATUS "VitaBand: main = src/main_sparkfun_tmp102_dk.c (SparkFun TMP102 DK I2C)")
   target_sources(app PRIVATE
     src/main_sparkfun_tmp102_dk.c
+  )
+elseif(CONFIG_VITABAND_TMP117_I2C_DEMO)
+  message(STATUS "VitaBand: main = src/main_tmp117_i2c.c (TMP117 I2C printk test)")
+  target_sources(app PRIVATE
+    src/main_tmp117_i2c.c
+    drivers/src/tmp117.c
   )
 else()
   message(STATUS "VitaBand: main = src/main.c (full application)")

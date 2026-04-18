@@ -2,8 +2,9 @@
  * TMP117-only I2C bring-up test (Segger RTT printk).
  * Same I2C0 pins as app.overlay (TWIM SCL=P0.26, SDA=P0.27).
  *
- * west build -b nrf52840dk/nrf52840 firmware -d build-tmp117-i2c -p always -- \
+ * west build -b nrf52840dk/nrf52840 firmware -d firmware/build -p always -- \
  *   -DCONF_FILE=prj_tmp117_i2c.conf -DDTC_OVERLAY_FILE=app_tmp117_i2c.overlay
+ * DK pin order: append ;app_tmp117_i2c_dkswap.overlay
  */
 
 #include <errno.h>
@@ -31,8 +32,8 @@ static void tmp117_bus_diag(void)
 		return;
 	}
 
-	printk("tmp117: diag TWIM in overlay: SCL=P0.26 SDA=P0.27\n");
-	printk("tmp117: diag if no ACK anywhere, try pin-swap (list second fragment):\n");
+	printk("tmp117: diag base overlay pins: VitaBand SCL=P0.26 SDA=P0.27\n");
+	printk("tmp117: diag on **DK Arduino only**, if every addr NACKs, rebuild with pin-swap fragment:\n");
 	printk("tmp117: diag   -DDTC_OVERLAY_FILE=\"app_tmp117_i2c.overlay;app_tmp117_i2c_dkswap.overlay\"\n");
 
 	(void)i2c_recover_bus(i2c);
@@ -59,6 +60,9 @@ static void tmp117_bus_diag(void)
 		printk("tmp117: diag SHT3x soft_reset: 0x44 -> %d, 0x45 -> %d (0=ACK)\n", r44,
 		       r45);
 	}
+
+	printk("tmp117: diag summary: all -5 → no slave ACK on this bus (power/GND/wrong header row/\n");
+	printk("tmp117:           pin order vs overlay, or sensor not populated). Firmware OK.\n");
 }
 
 int main(void)
@@ -69,7 +73,15 @@ int main(void)
 	printk("tmp117: TMP117 I2C addr from devicetree reg = 0x%02x\n",
 	       (unsigned int)TMP117_I2C_ADDR);
 	printk("tmp117: (TMP117 ADD0: GND=0x48 V+=0x49 SDA=0x4A SCL=0x4B per datasheet)\n");
-	k_sleep(K_MSEC(100));
+
+	k_sleep(K_MSEC(250));
+
+	{
+		const struct device *i2c = DEVICE_DT_GET(DT_NODELABEL(i2c0));
+
+		printk("tmp117: i2c0 ready: %s\n",
+		       device_is_ready(i2c) ? "yes" : "no (TWIM/binding issue — check nordic,nrf-twim overlay)");
+	}
 
 	ret = tmp117_init();
 	if (ret != 0) {

@@ -24,7 +24,8 @@
 ├── inc/            # Application headers (BLE, Power, Sensors)
 ├── src/            # Main logic & State Machine
 ├── app_bringup_min.overlay / app_ambient_pwm.overlay (+ optional *_i2c_dkswap)
-├── app_sparkfun_tmp102_dk*.overlay / prj_sparkfun_tmp102_dk*.conf (TMP102: stock D14/D15, A4/A5, i2c1 remap, or **custom_pins**)
+├── app_sparkfun_tmp102_dk*.overlay / prj_sparkfun_tmp102_dk*.conf (TMP102)
+├── app_tmp117_i2c*.overlay / prj_tmp117_i2c.conf (TMP117)
 ├── prj.conf, prj_bringup.conf, prj_ambient_pwm.conf, …
 └── CMakeLists.txt
 ```

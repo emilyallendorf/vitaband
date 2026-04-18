@@ -1,7 +1,9 @@
 #include "max86140.h"
+#include <stdbool.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/printk.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
@@ -120,6 +122,8 @@ LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
  * ══════════════════════════════════════════════════════════════════════════ */
 #define SAMPLES_PER_READ    32
 #define BYTES_PER_SAMPLE    3      /* 19-bit left-justified + 3-bit tag */
+/* Two active LED slots (IR + Red) → 2 FIFO words (6 bytes) per PPG frame */
+#define MAX_FIFO_WORDS      (SAMPLES_PER_READ * 2)
 #define MIN_HEART_RATE      40
 #define MAX_HEART_RATE      220
 #define SAMPLE_RATE_HZ      100
@@ -146,9 +150,9 @@ static const struct spi_dt_spec spi_dev =
 /* ══════════════════════════════════════════════════════════════════════════
  * STATIC BUFFERS
  * ══════════════════════════════════════════════════════════════════════════ */
-/* Worst-case: 2-byte header + 32 samples * 3 bytes = 98 bytes */
-#define TX_BUF_LEN   (2 + SAMPLES_PER_READ * BYTES_PER_SAMPLE)
-#define RX_BUF_LEN   (2 + SAMPLES_PER_READ * BYTES_PER_SAMPLE)
+/* Worst-case burst: header + up to MAX_FIFO_WORDS 3-byte samples (IR+Red pairs) */
+#define TX_BUF_LEN   (2 + MAX_FIFO_WORDS * BYTES_PER_SAMPLE)
+#define RX_BUF_LEN   (2 + MAX_FIFO_WORDS * BYTES_PER_SAMPLE)
 
 static uint8_t tx_buf[TX_BUF_LEN];
 static uint8_t rx_buf[RX_BUF_LEN];
@@ -158,6 +162,65 @@ static int32_t ir_samples[SAMPLES_PER_READ];
 /* Heart rate state */
 static uint8_t  calculated_hr   = 0;
 static uint32_t last_peak_time  = 0;
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Agent debug NDJSON (session 75362d) — printk lines; save RTT to workspace log.
+ * ══════════════════════════════════════════════════════════════════════════ */
+/* #region agent log */
+static uint8_t  dbg_fifo_reg_count;
+static uint8_t  dbg_fifo_words;
+static uint8_t  dbg_fifo_n;
+static int32_t  dbg_ir_min;
+static int32_t  dbg_ir_max;
+static int32_t  dbg_mean;
+static int32_t  dbg_thresh;
+static uint8_t  dbg_peak_count;
+static uint32_t dbg_interval_ms;
+static uint32_t dbg_cand_bpm;
+static uint8_t  dbg_rejected;
+static uint8_t  dbg_baseline_ready;
+
+static void hr_agent_emit(uint32_t ts, const char *hyp, const char *loc,
+			  int fifo_ret)
+{
+	char b[320];
+
+	snprintk(b, sizeof(b),
+		 "{\"sessionId\":\"75362d\",\"timestamp\":%u,\"hypothesisId\":\"%s\",\"location\":\"%s\","
+		 "\"message\":\"hr_snapshot\",\"data\":{\"fifoRet\":%d,\"fifoReg\":%u,\"words\":%u,"
+		 "\"n\":%u,\"irMin\":%d,\"irMax\":%d,\"mean\":%d,\"thr\":%d,\"peaks\":%u,"
+		 "\"ivMs\":%u,\"candBpm\":%u,\"rej\":%u,\"baseRdy\":%u,\"hr\":%u}}\n",
+		 ts, hyp, loc, fifo_ret, dbg_fifo_reg_count, dbg_fifo_words, dbg_fifo_n,
+		 dbg_ir_min, dbg_ir_max, dbg_mean, dbg_thresh, dbg_peak_count,
+		 dbg_interval_ms, dbg_cand_bpm, (unsigned int)dbg_rejected,
+		 (unsigned int)dbg_baseline_ready, calculated_hr);
+	printk("%s", b);
+}
+/* #endregion */
+
+/* Human-readable RTT lines (CONFIG_LOG=n — LOG_* does not print). Rate-limited. */
+static void max86140_rtt_status(uint32_t t, int fifo_ret, bool have_ir_batch)
+{
+	static uint32_t last_ms;
+
+	if (t - last_ms < 1000U) {
+		return;
+	}
+	last_ms = t;
+
+	if (!have_ir_batch) {
+		printk("max86140: fifo_ret=%d fifo_reg=%u (waiting for FIFO / SPI)\n",
+		       fifo_ret, (unsigned int)dbg_fifo_reg_count);
+		return;
+	}
+
+	printk("max86140: n=%u fifo_reg=%u ir_min=%d ir_max=%d mean=%d thr=%d "
+	       "peaks=%u iv_ms=%u cand_bpm=%u rej=%u hr=%u\n",
+	       (unsigned int)dbg_fifo_n, (unsigned int)dbg_fifo_reg_count,
+	       dbg_ir_min, dbg_ir_max, dbg_mean, dbg_thresh,
+	       (unsigned int)dbg_peak_count, dbg_interval_ms, dbg_cand_bpm,
+	       (unsigned int)dbg_rejected, calculated_hr);
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
  * LOW-LEVEL SPI HELPERS
@@ -197,14 +260,14 @@ static int max86140_read_reg(uint8_t reg, uint8_t *val)
 }
 
 /**
- * @brief Burst-read N bytes from REG_FIFO_DATA.
+ * @brief Burst-read N 3-byte FIFO words from REG_FIFO_DATA.
  *
- * Header (2 bytes) + data (n_bytes) sent/received in a single SPI transfer.
+ * Header (2 bytes) + data (n_words * 3) sent/received in a single SPI transfer.
  * The nRF52840 SPIM handles up to 65535 bytes per transfer.
  */
-static int max86140_read_fifo_burst(uint8_t n_samples, uint8_t *data_out)
+static int max86140_read_fifo_burst(uint8_t n_words, uint8_t *data_out)
 {
-    uint32_t total = 2 + (uint32_t)n_samples * BYTES_PER_SAMPLE;
+    uint32_t total = 2 + (uint32_t)n_words * BYTES_PER_SAMPLE;
 
     memset(tx_buf, 0, total);
     tx_buf[0] = REG_FIFO_DATA | SPI_READ_BIT;
@@ -218,7 +281,7 @@ static int max86140_read_fifo_burst(uint8_t n_samples, uint8_t *data_out)
     int ret = spi_transceive_dt(&spi_dev, &tx_set, &rx_set);
     if (ret == 0) {
         /* Skip the 2-byte header in rx_buf */
-        memcpy(data_out, &rx_buf[2], n_samples * BYTES_PER_SAMPLE);
+        memcpy(data_out, &rx_buf[2], n_words * BYTES_PER_SAMPLE);
     }
     return ret;
 }
@@ -231,27 +294,34 @@ int max86140_init(void)
 {
     if (!spi_is_ready_dt(&spi_dev)) {
         LOG_ERR("SPI bus not ready for MAX86140");
+        printk("max86140: SPI bus not ready\n");
         return -ENODEV;
     }
+    printk("max86140: SPI ok, reading Part ID…\n");
 
     /* ── 1. Read and verify Part ID ── */
     uint8_t part_id = 0;
     int ret = max86140_read_reg(REG_PART_ID, &part_id);
     if (ret != 0) {
         LOG_ERR("Failed to read Part ID: %d", ret);
+        printk("max86140: Part ID read failed ret=%d\n", ret);
         return ret;
     }
     if (part_id != MAX86140_PART_ID) {
         LOG_WRN("Unexpected Part ID: 0x%02x (expected 0x%02x)",
                 part_id, MAX86140_PART_ID);
+        printk("max86140: WARN part_id=0x%02x expect 0x%02x (wrong chip or bad SPI)\n",
+               part_id, MAX86140_PART_ID);
     } else {
         LOG_INF("MAX86140 detected. Part ID: 0x%02x", part_id);
+        printk("max86140: Part ID 0x%02x OK\n", part_id);
     }
 
     /* ── 2. Software reset ── */
     ret = max86140_write_reg(REG_SYSTEM_CTRL, SYS_RESET);
     if (ret != 0) {
         LOG_ERR("Reset failed: %d", ret);
+        printk("max86140: reset write failed ret=%d\n", ret);
         return ret;
     }
     k_msleep(10);   /* datasheet: allow POR to complete */
@@ -261,11 +331,19 @@ int max86140_init(void)
      *   FIFO_CONFIG_2: FIFO_ROLL_ON_FULL enabled, stat cleared on read
      */
     ret = max86140_write_reg(REG_FIFO_CONFIG_1, 0x10);
-    if (ret != 0) { LOG_ERR("FIFO config 1 failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("FIFO config 1 failed: %d", ret);
+        printk("max86140: FIFO_CONFIG_1 failed ret=%d\n", ret);
+        return ret;
+    }
 
     ret = max86140_write_reg(REG_FIFO_CONFIG_2,
                              FIFO_ROLL_ON_FULL | FIFO_STAT_CLR);
-    if (ret != 0) { LOG_ERR("FIFO config 2 failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("FIFO config 2 failed: %d", ret);
+        printk("max86140: FIFO_CONFIG_2 failed ret=%d\n", ret);
+        return ret;
+    }
 
     /* ── 4. Configure PPG ──
      *   ADC range: 16μA, integration time: 117.3μs, LP_MODE on
@@ -273,11 +351,19 @@ int max86140_init(void)
      */
     ret = max86140_write_reg(REG_PPG_CONFIG_1,
                              PPG_ADC_RGE_16UA | PPG_TINT_117US | PPG_LP_MODE);
-    if (ret != 0) { LOG_ERR("PPG config 1 failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("PPG config 1 failed: %d", ret);
+        printk("max86140: PPG_CONFIG_1 failed ret=%d\n", ret);
+        return ret;
+    }
 
     ret = max86140_write_reg(REG_PPG_CONFIG_2,
                              PPG_SR_100SPS | PPG_LED_SETLNG_6US);
-    if (ret != 0) { LOG_ERR("PPG config 2 failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("PPG config 2 failed: %d", ret);
+        printk("max86140: PPG_CONFIG_2 failed ret=%d\n", ret);
+        return ret;
+    }
 
     /* ── 5. Configure LED sequence ──
      *   Slot 1: LED1 (IR)
@@ -288,26 +374,51 @@ int max86140_init(void)
      */
     ret = max86140_write_reg(REG_LED_SEQ_1,
                              (LEDC_LED2 << 4) | LEDC_LED1);
-    if (ret != 0) { LOG_ERR("LED seq 1 failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("LED seq 1 failed: %d", ret);
+        printk("max86140: LED_SEQ_1 failed ret=%d\n", ret);
+        return ret;
+    }
 
     ret = max86140_write_reg(REG_LED_SEQ_2, 0x00);  /* slots 3+4 off */
-    if (ret != 0) { LOG_ERR("LED seq 2 failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("LED seq 2 failed: %d", ret);
+        printk("max86140: LED_SEQ_2 failed ret=%d\n", ret);
+        return ret;
+    }
 
     ret = max86140_write_reg(REG_LED_SEQ_3, 0x00);  /* slots 5+6 off */
-    if (ret != 0) { LOG_ERR("LED seq 3 failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("LED seq 3 failed: %d", ret);
+        printk("max86140: LED_SEQ_3 failed ret=%d\n", ret);
+        return ret;
+    }
 
     /* ── 6. Set LED pulse amplitudes ~~25 mA each ──
      *   With LEDx_RGE = 0x0 (31 mA full scale), 0x7F ≈ 15.5 mA
      */
     ret = max86140_write_reg(REG_LED1_PA, 0x7F);
-    if (ret != 0) { LOG_ERR("LED1 PA failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("LED1 PA failed: %d", ret);
+        printk("max86140: LED1_PA failed ret=%d\n", ret);
+        return ret;
+    }
 
     ret = max86140_write_reg(REG_LED2_PA, 0x7F);
-    if (ret != 0) { LOG_ERR("LED2 PA failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("LED2 PA failed: %d", ret);
+        printk("max86140: LED2_PA failed ret=%d\n", ret);
+        return ret;
+    }
+    printk("max86140: LEDs scheduled (IR+Red), PA=0x7F each, 100 sps\n");
 
     /* ── 7. Enable interrupts: A_FULL and PPG_RDY ── */
     ret = max86140_write_reg(REG_INT_ENABLE_1, INT_A_FULL | INT_PPG_RDY);
-    if (ret != 0) { LOG_ERR("INT enable failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("INT enable failed: %d", ret);
+        printk("max86140: INT_ENABLE failed ret=%d\n", ret);
+        return ret;
+    }
 
     /* ── 8. Clear any pending interrupt flags ── */
     uint8_t dummy;
@@ -317,18 +428,31 @@ int max86140_init(void)
     /* ── 9. Flush FIFO before starting ── */
     ret = max86140_write_reg(REG_FIFO_CONFIG_2,
                              FIFO_FLUSH | FIFO_ROLL_ON_FULL | FIFO_STAT_CLR);
-    if (ret != 0) { LOG_ERR("FIFO flush failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("FIFO flush failed: %d", ret);
+        printk("max86140: FIFO flush failed ret=%d\n", ret);
+        return ret;
+    }
 
     /* Re-arm FIFO config without flush bit */
     ret = max86140_write_reg(REG_FIFO_CONFIG_2,
                              FIFO_ROLL_ON_FULL | FIFO_STAT_CLR);
-    if (ret != 0) { LOG_ERR("FIFO re-arm failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("FIFO re-arm failed: %d", ret);
+        printk("max86140: FIFO re-arm failed ret=%d\n", ret);
+        return ret;
+    }
 
     /* ── 10. Exit shutdown ── */
     ret = max86140_write_reg(REG_SYSTEM_CTRL, 0x00);
-    if (ret != 0) { LOG_ERR("Exit shutdown failed: %d", ret); return ret; }
+    if (ret != 0) {
+        LOG_ERR("Exit shutdown failed: %d", ret);
+        printk("max86140: exit shutdown failed ret=%d\n", ret);
+        return ret;
+    }
 
     LOG_INF("MAX86140 initialized successfully");
+    printk("max86140: init done (running, out of shutdown)\n");
     return 0;
 }
 
@@ -340,24 +464,51 @@ static int max86140_read_fifo(uint8_t *sample_count_out, int32_t *ir_out)
 {
     uint8_t fifo_count = 0;
     int ret = max86140_read_reg(REG_FIFO_DATA_COUNT, &fifo_count);
+    /* #region agent log */
+    dbg_fifo_reg_count = fifo_count;
+    /* #endregion */
     if (ret != 0) {
         LOG_ERR("FIFO count read failed: %d", ret);
+        printk("max86140: FIFO_DATA_COUNT read failed ret=%d\n", ret);
         return ret;
     }
     if (fifo_count == 0) {
+        dbg_fifo_words = 0;
+        dbg_fifo_n = 0;
         *sample_count_out = 0;
         return 0;
     }
 
-    uint8_t n = (fifo_count > SAMPLES_PER_READ) ? SAMPLES_PER_READ : fifo_count;
+    /*
+     * REG_FIFO_DATA_COUNT = number of 3-byte words in the FIFO (datasheet).
+     * Two LED slots per frame → words is even: [IR][Red][IR][Red]...
+     */
+    uint8_t words = fifo_count;
+    if (words > MAX_FIFO_WORDS) {
+        words = MAX_FIFO_WORDS;
+    }
+    if ((words & 1U) != 0U) {
+        words--;
+    }
+    if (words == 0U) {
+        dbg_fifo_words = words;
+        dbg_fifo_n = 0;
+        *sample_count_out = 0;
+        return 0;
+    }
 
-    /* Raw FIFO bytes: n samples × 2 channels × 3 bytes each
-     * We configured 2 LED slots (LED1=IR, LED2=Red), so each "frame"
-     * in the FIFO is 2 × 3 = 6 bytes. We only extract the IR channel (slot 1). */
-    static uint8_t raw[SAMPLES_PER_READ * BYTES_PER_SAMPLE * 2];
-    ret = max86140_read_fifo_burst(n * 2, raw);   /* 2 channels per sample */
+    uint8_t n = words / 2U; /* IR samples (one per IR+Red pair), ≤ SAMPLES_PER_READ */
+    /* #region agent log */
+    dbg_fifo_words = words;
+    dbg_fifo_n = n;
+    /* #endregion */
+
+    static uint8_t raw[MAX_FIFO_WORDS * BYTES_PER_SAMPLE];
+    ret = max86140_read_fifo_burst(words, raw);
     if (ret != 0) {
         LOG_ERR("FIFO burst read failed: %d", ret);
+        printk("max86140: FIFO burst read failed ret=%d (len=%u words)\n",
+               ret, (unsigned int)words);
         return ret;
     }
 
@@ -397,6 +548,26 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n)
     static int32_t baseline          = 0;
     static bool    baseline_ready    = false;
 
+    /* #region agent log */
+    dbg_peak_count = 0;
+    dbg_interval_ms = 0;
+    dbg_cand_bpm = 0;
+    dbg_rejected = 0;
+    dbg_baseline_ready = baseline_ready ? 1U : 0U;
+    if (n > 0) {
+        dbg_ir_min = samples[0];
+        dbg_ir_max = samples[0];
+        for (int i = 1; i < n; i++) {
+            if (samples[i] < dbg_ir_min) {
+                dbg_ir_min = samples[i];
+            }
+            if (samples[i] > dbg_ir_max) {
+                dbg_ir_max = samples[i];
+            }
+        }
+    }
+    /* #endregion */
+
     if (n == 0) return calculated_hr;
 
     /* Compute mean of this batch */
@@ -407,14 +578,27 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n)
     if (!baseline_ready) {
         baseline       = batch_mean;
         baseline_ready = true;
+        /* #region agent log */
+        dbg_mean = batch_mean;
+        dbg_thresh = 0;
+        /* #endregion */
         return 0;
     }
 
     /* Slow-tracking baseline (95% old + 5% new) */
     baseline = (baseline * 95 + batch_mean * 5) / 100;
 
-    /* Threshold: 10% above baseline */
-    int32_t threshold = baseline + (baseline / 10);
+    /* Threshold a few % above baseline (PPG AC is small vs DC) */
+    int32_t delta = baseline / 15;
+    if (delta < 400) {
+        delta = 400;
+    }
+    int32_t threshold = baseline + delta;
+
+    /* #region agent log */
+    dbg_mean = batch_mean;
+    dbg_thresh = threshold;
+    /* #endregion */
 
     uint32_t now_ms = k_uptime_get_32();
 
@@ -423,13 +607,29 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n)
                        (samples[i] > samples[i + 1]) &&
                        (samples[i] > threshold);
 
+        if (is_peak) {
+            /* #region agent log */
+            dbg_peak_count++;
+            /* #endregion */
+        }
+
         if (is_peak && last_peak_time > 0) {
             uint32_t interval_ms = now_ms - last_peak_time;
             if (interval_ms > 0) {
                 uint32_t bpm = 60000U / interval_ms;
+                /* #region agent log */
+                dbg_interval_ms = interval_ms;
+                dbg_cand_bpm = bpm;
+                /* #endregion */
                 if (bpm >= MIN_HEART_RATE && bpm <= MAX_HEART_RATE) {
                     calculated_hr = (uint8_t)bpm;
                     LOG_DBG("HR: %u BPM (interval %u ms)", calculated_hr, interval_ms);
+                    printk("max86140: HR accept %u BPM (interval %u ms)\n",
+                           calculated_hr, interval_ms);
+                } else {
+                    /* #region agent log */
+                    dbg_rejected = 1;
+                    /* #endregion */
                 }
             }
             last_peak_time = now_ms;
@@ -449,8 +649,31 @@ uint8_t max86140_read_heartrate(void)
 {
     uint8_t n = 0;
     int ret = max86140_read_fifo(&n, ir_samples);
+    uint32_t t = k_uptime_get_32();
+
+    /* #region agent log */
+    static uint32_t agent_last_emit;
+
     if (ret != 0 || n == 0) {
+        if (t - agent_last_emit >= 500U) {
+            agent_last_emit = t;
+            hr_agent_emit(t, "H4", "max86140.c:fifo_empty_or_err", ret);
+        }
+        max86140_rtt_status(t, ret, false);
         return calculated_hr;   /* return last known value */
     }
-    return max86140_calculate_hr(ir_samples, n);
+    /* #endregion */
+
+    uint8_t hr = max86140_calculate_hr(ir_samples, n);
+
+    /* #region agent log */
+    t = k_uptime_get_32();
+    if (t - agent_last_emit >= 500U) {
+        agent_last_emit = t;
+        hr_agent_emit(t, "H1-H5", "max86140.c:fifo_ok", 0);
+    }
+    /* #endregion */
+    max86140_rtt_status(t, 0, true);
+
+    return hr;
 }

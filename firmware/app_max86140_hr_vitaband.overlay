@@ -1,0 +1,95 @@
+/*
+ * VitaBand PCB — MAX86140 SPI (matches schematic nets):
+ *   SCLK → P0.14   SDI/MOSI → P0.15   SDO/MISO → P0.12   CSB → P0.13 (active low)
+ *   HR_INT → P0.05 (interrupt; not used by drivers/src/max86140.c yet)
+ *
+ * Uses **SPI0** with explicit pinctrl — Zephyr picks the peripheral because this overlay
+ * attaches those pins (and CS GPIO) to `&spi0`, not because it auto-detects the chip.
+ *
+ * IMPORTANT (nRF52840DK target): DK firmware muxes **PWM LED** to **P0.13** — same pin as CS
+ * on your PCB. pwm0 + pwmleds are forced off here so P0.13 is GPIO CS.
+ *
+ * Build:
+ *   -DDTC_OVERLAY_FILE=app_max86140_hr_vitaband.overlay
+ * with prj_max86140_hr.conf
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+/*
+ * DK routes green LED PWM to P0.13 — must release for CSB.
+ * On a bare VitaBand PCB there is no DK LED; disabling pwm0 is still safe.
+ */
+&pwm0 {
+	status = "disabled";
+};
+
+&pinctrl {
+	spi0_max86140_vb: spi0_max86140_vb {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>,
+				<NRF_PSEL(SPIM_MISO, 0, 13)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+
+	spi0_max86140_vb_sleep: spi0_max86140_vb_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 14)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>,
+				<NRF_PSEL(SPIM_MISO, 0, 13)>;
+			low-power-enable;
+		};
+	};
+};
+
+&spi0 {
+	status = "okay";
+	pinctrl-0 = <&spi0_max86140_vb>;
+	pinctrl-1 = <&spi0_max86140_vb_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+
+	max86140: maxim_max86140@0 {
+		compatible = "maxim,max86140";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+	};
+};
+
+/* Other SPI masters off so mux is explicit */
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};

@@ -1,107 +1,64 @@
 /*
- * Ambient SHT3x-DIS: periodic temperature + humidity (Segger RTT printk).
+ * Ambient SHT3x-DIS: periodic temperature + humidity (Segger RTT printk) via Zephyr SHT3XD driver.
  *
  * Build: prj_ambient_pwm.conf + app_ambient_pwm.overlay
  */
 
-#include <errno.h>
-
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
-#include "sht3x-dis.h"
-
-#define SAMPLE_INTERVAL_MS 500U
-
-#define SHT3X_I2C_ADDR DT_REG_ADDR(DT_NODELABEL(sht3xdis))
-
-/* Same as SHT3X_CMD_SOFT_RESET in drivers/src/sht3x-dis.c */
-static const uint8_t sht3x_soft_reset[] = { 0x30, 0xA2 };
-
-static void ambient_print_init_err(int err)
-{
-	printk("ambient: SHT3x init failed (%d)", err);
-	if (err == -EIO) {
-		printk(" (-EIO: no I2C ACK — DT reg vs ADDR pin (GND=0x44, VDD=0x45), ");
-		printk("pins, power, pull-ups)\n");
-	} else if (err == -ENODEV) {
-		printk(" (-ENODEV: I2C controller not ready)\n");
-	} else {
-		printk("\n");
-	}
-}
-
-static void ambient_i2c_bus_diag(void)
-{
-	const struct device *i2c = DEVICE_DT_GET(DT_NODELABEL(i2c0));
-	static const uint8_t byte0[] = { 0 };
-	int any = 0;
-	int rc;
-
-	if (!device_is_ready(i2c)) {
-		printk("ambient: diag i2c0 not ready\n");
-		return;
-	}
-
-	rc = i2c_recover_bus(i2c);
-	printk("ambient: diag i2c_recover_bus -> %d\n", rc);
-
-	printk("ambient: diag scan 0x40-0x4f (1-byte write 0x00, expect hits if bus OK):\n");
-	for (uint16_t a = 0x40; a <= 0x4f; a++) {
-		if (i2c_write(i2c, byte0, 1, a) == 0) {
-			printk("ambient:   ACK at 0x%02x\n", a);
-			any = 1;
-		}
-	}
-	if (!any) {
-		printk("ambient:   (no ACK — likely wrong SCL/SDA pins or no slaves / no pull-ups)\n");
-	}
-
-	{
-		int r44 = i2c_write(i2c, sht3x_soft_reset, sizeof(sht3x_soft_reset), 0x44);
-		int r45 = i2c_write(i2c, sht3x_soft_reset, sizeof(sht3x_soft_reset), 0x45);
-
-		printk("ambient: diag SHT3x soft_reset: 0x44 -> %d, 0x45 -> %d (0 = ACK)\n", r44,
-		       r45);
-	}
-}
+/* Same command as Zephyr sht3xd.c init: SHT3XD_CMD_CLEAR_STATUS = 0x3041 */
+static const uint8_t sht3xd_clear_status[] = { 0x30, 0x41 };
 
 int main(void)
 {
-	int ret;
+	const struct device *sht = DEVICE_DT_GET(DT_NODELABEL(sht3xdis));
+	const struct device *bus = DEVICE_DT_GET(DT_PARENT(DT_NODELABEL(sht3xdis)));
+
+	k_sleep(K_MSEC(2000)); /* wait for RTT viewer to attach */
 
 	printk("\n=== VitaBand ambient SHT3x-DIS demo ===\n");
-	printk("ambient: build sees sht3xdis I2C addr 0x%02x (expect 0x45 if ADDR→VDD)\n",
-	       (unsigned int)SHT3X_I2C_ADDR);
-	printk("ambient: TWIM pinctrl in overlay: SCL=P0.26 SDA=P0.27 (use *_i2c_dkswap if swapped)\n");
-	k_sleep(K_MSEC(100));
 
-	const struct device *i2c = DEVICE_DT_GET(DT_NODELABEL(i2c0));
-	printk("i2c0 ready: %d\n", device_is_ready(i2c));
+	/* #region agent log */
+	printk("ambient/dbg: hyp=A bus=%s parent_ready=%d\n", bus->name,
+	       device_is_ready(bus));
+	{
+		int p44 = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
+				    0x44);
+		int p45 = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
+				    0x45);
 
-	ret = sht3xdis_init();
-	if (ret != 0) {
-		printk("error: %d\n", ret);
-		ambient_i2c_bus_diag();
-		return 0;
+		printk("ambient/dbg: hyp=B I2C clear-status write: 0x44->%d 0x45->%d "
+		       "(0=ACK; -EIO typical NACK)\n",
+		       p44, p45);
+	}
+	/* #endregion */
+
+	if (!device_is_ready(sht)) {
+		printk("SHT3x not ready — power, solder, or I2C pinmux vs PCB (shared bus with TMP117)\n");
+		printk("hint: app_ambient_pwm.overlay must match VitaBand SCL/SDA pads; optional "
+		       "app_ambient_pwm_i2c_dkswap.overlay for legacy pin order.\n");
+		printk("hint: if only 0x44 ACKs, set reg = <0x44> (ADDR pin to GND).\n");
+		return -1;
 	}
 
-	printk("ambient: SHT3x OK, sampling every %u ms\n", SAMPLE_INTERVAL_MS);
+	printk("SHT3x ready, sampling every 500ms\n");
 
 	for (;;) {
-		float temp_c;
-		float rh_pct;
+		struct sensor_value temp, humidity;
 
-		ret = sht3xdis_read_all(&temp_c, &rh_pct);
-		if (ret != 0) {
-			printk("ambient: read failed (%d)\n", ret);
-		} else {
-			printk("ambient: %.2f C, %.1f %%RH\n", (double)temp_c, (double)rh_pct);
-		}
+		sensor_sample_fetch(sht);
+		sensor_channel_get(sht, SENSOR_CHAN_AMBIENT_TEMP, &temp);
+		sensor_channel_get(sht, SENSOR_CHAN_HUMIDITY, &humidity);
 
-		k_sleep(K_MSEC(SAMPLE_INTERVAL_MS));
+		printk("Temp: %d.%06d C  Humidity: %d.%06d %%RH\n",
+		       temp.val1, temp.val2,
+		       humidity.val1, humidity.val2);
+
+		k_sleep(K_MSEC(500));
 	}
 }

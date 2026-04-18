@@ -62,8 +62,8 @@
 	i2c0_custom_tmp102: i2c0_custom_tmp102 {
 		group1 {
 			/* vvv EDIT pin numbers (0–31) vvv */
-			psels = <NRF_PSEL(TWIM_SDA, 0, 28)>,
-				<NRF_PSEL(TWIM_SCL, 0, 29)>;
+			psels = <NRF_PSEL(TWIM_SDA, 0, 27)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
 			/* ^^^ SDA first, SCL second ^^^ */
 			bias-pull-up;
 		};
@@ -71,8 +71,8 @@
 
 	i2c0_custom_tmp102_sleep: i2c0_custom_tmp102_sleep {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SDA, 0, 28)>,
-				<NRF_PSEL(TWIM_SCL, 0, 29)>;
+			psels = <NRF_PSEL(TWIM_SDA, 0, 27)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
 			low-power-enable;
 		};
 	};

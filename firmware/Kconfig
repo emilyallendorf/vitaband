@@ -11,16 +11,41 @@ config VITABAND_BLINKY_BRINGUP
 	    -DDTC_OVERLAY_FILE=app_bringup_min.overlay
 	  printk via Segger RTT on DK.
 
+config VITABAND_PWM_I2C_PIN_SCOPE
+	bool "PWM scope on P0.26 / P0.27 (Arduino D14/D15; VitaBand I2C pads)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	default n
+	help
+	  pwm0 channels 1+2 → P0.26 + P0.27 at ~10 kHz (different duty cycles).
+	  TWIM/SPI that mux those pins are disabled in app_pwm_i2c_pins_scope.overlay.
+	  prj_pwm_i2c_pins_scope.conf + pass that overlay.
+
 config VITABAND_AMBIENT_PWM_DEMO
 	bool "SHT3x ambient: printk temp/RH on Segger RTT (I2C)"
 	depends on !VITABAND_BLINKY_BRINGUP
 	default n
 	help
-	  Link main_ambient_pwm.c + SHT3x driver only. Prints temperature and humidity
+	  Link main_ambient_pwm.c only (Zephyr CONFIG_SHT3XD). Prints temperature and humidity
 	  every 500 ms via RTT. Use prj_ambient_pwm.conf and pass overlay(s):
 	    -DDTC_OVERLAY_FILE=app_ambient_pwm.overlay
 	  On DK without VitaBand wiring, append:
 	    app_ambient_pwm_i2c_dkswap.overlay
+
+config VITABAND_MAX86140_HR_DEMO
+	bool "MAX86140/41 HR (SPI): printk BPM on Segger RTT"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	default n
+	help
+	  Links drivers/src/max86140.c + main_max86140_hr.c. Default overlay uses DK
+	  Arduino SPI (SPI3, CS=D10). VitaBand: edit app_max86140_hr.overlay for SPI pins + CS GPIO.
+	  prj_max86140_hr.conf + app_max86140_hr.overlay.
 
 config VITABAND_SPARKFUN_TMP102_DK
 	bool "SparkFun TMP102 on nRF52840 DK Arduino I2C (printk RTT)"
@@ -31,11 +56,23 @@ config VITABAND_SPARKFUN_TMP102_DK
 	  Minimal I2C bring-up: TI TMP102 @ 0x48 on DK SDA=P0.26 / SCL=P0.27.
 	  prj_sparkfun_tmp102_dk.conf + app_sparkfun_tmp102_dk.overlay.
 
+config VITABAND_TMP117_I2C_DEMO
+	bool "TMP117 I2C printk test on Segger RTT"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	default n
+	help
+	  TI TMP117 via drivers/src/tmp117.c. Default overlay: VitaBand SCL=P0.26 SDA=P0.27.
+	  prj_tmp117_i2c.conf + app_tmp117_i2c.overlay; append app_tmp117_i2c_dkswap.overlay for DK.
+
 config VITABAND_NO_BLE
 	bool "Application main without Bluetooth (state machine + sensors)"
 	depends on !VITABAND_BLINKY_BRINGUP
 	depends on !VITABAND_AMBIENT_PWM_DEMO
 	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
 	default n
 	help
 	  Same 1 Hz sensor loop and state machine as production main, but no BT
