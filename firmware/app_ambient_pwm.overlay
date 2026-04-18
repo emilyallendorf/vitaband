@@ -1,6 +1,8 @@
 /*
- * I2C0: SDA P0.26 / SCL P0.27 (nRF52840 DK Arduino header).
- * SHT3x-DIS @ 0x44 (ambient).
+ * I2C0: VitaBand TWIM — SCL P0.26, SDA P0.27 (Arduino-style header on DK is the opposite).
+ * On nRF52840 DK alone (no VitaBand wiring), append AFTER this file:
+ *   app_ambient_pwm_i2c_dkswap.overlay
+ * SHT3x-DIS @ 0x45 (ADDR → VDD; use 0x44 if ADDR → GND).
  * printk: Segger RTT (prj_ambient_pwm.conf) — uart0 disabled like bring-up.
  *
  * west build ... -DCONF_FILE=prj_ambient_pwm.conf -DDTC_OVERLAY_FILE=app_ambient_pwm.overlay
@@ -34,6 +36,11 @@
 	status = "disabled";
 };
 
+/* nRF52: SPI0 default pinctrl can overlap Arduino I2C pins — keep off for I2C0 bring-up */
+&spi0 {
+	status = "disabled";
+};
+
 &spi1 {
 	status = "disabled";
 };
@@ -45,15 +52,16 @@
 &pinctrl {
 	i2c0_ambient: i2c0_ambient {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
-				<NRF_PSEL(TWIM_SCL, 0, 27)>;
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			bias-pull-up;
 		};
 	};
 
 	i2c0_ambient_sleep: i2c0_ambient_sleep {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
-				<NRF_PSEL(TWIM_SCL, 0, 27)>;
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
 			low-power-enable;
 		};
 	};
@@ -66,8 +74,8 @@
 	pinctrl-names = "default", "sleep";
 	clock-frequency = <100000>;
 
-	sht3xdis: sht3x@44 {
+	sht3xdis: sht3xdis@45 {
 		compatible = "sensirion,sht3xd";
-		reg = <0x44>;
+		reg = <0x45>;
 	};
 };

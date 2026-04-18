@@ -2,6 +2,7 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/types.h>
+#include <zephyr/sys/printk.h>
 #include "sht3x-dis.h"
 
 LOG_MODULE_REGISTER(sht3xdis, LOG_LEVEL_INF);
@@ -43,7 +44,7 @@ static int sht3xdis_read_data(uint8_t *buffer, size_t len) {
 /* ============================ INITIALIZATION ============================== */
 int sht3xdis_init(void) {
     if (!device_is_ready(i2c_dev.bus)) {
-        LOG_ERR("I2C bus not ready for SHT3x");
+        printk("I2C bus not ready for SHT3x");
         return -ENODEV;
     }
 

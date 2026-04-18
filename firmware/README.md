@@ -23,7 +23,11 @@
 │   └── src/        # I2C driver implementations
 ├── inc/            # Application headers (BLE, Power, Sensors)
 ├── src/            # Main logic & State Machine
-├── app.overlay     # Devicetree hardware definitions
-├── prj.conf        # Kconfig project configuration
-└── CMakeLists.txt  # Build system configuration
+├── app_bringup_min.overlay / app_ambient_pwm.overlay (+ optional *_i2c_dkswap)
+├── app_sparkfun_tmp102_dk*.overlay / prj_sparkfun_tmp102_dk*.conf (TMP102: stock D14/D15, A4/A5, i2c1 remap, or **custom_pins**)
+├── prj.conf, prj_bringup.conf, prj_ambient_pwm.conf, …
+└── CMakeLists.txt
+```
+
+Bring-up and ambient images do **not** use a shared root `app.overlay`: pass the matching file with `-DDTC_OVERLAY_FILE=…` (see the header comments in each `prj_*.conf`) so overlays never merge unexpectedly.
 

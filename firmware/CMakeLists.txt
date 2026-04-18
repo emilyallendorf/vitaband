@@ -2,10 +2,8 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-option(VITABAND_BRINGUP_OVERLAY "Append bringup.overlay (disable &i2c0 and &spi1)" OFF)
-if(VITABAND_BRINGUP_OVERLAY)
-  list(APPEND EXTRA_DTC_OVERLAY_FILE "${CMAKE_CURRENT_SOURCE_DIR}/bringup.overlay")
-endif()
+# Lets editors (C/C++, clangd) resolve Zephyr headers after `west build`.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(vitaband_firmware)
@@ -20,11 +18,10 @@ elseif(CONFIG_VITABAND_AMBIENT_PWM_DEMO)
     src/main_ambient_pwm.c
     drivers/src/sht3x-dis.c
   )
-elseif(CONFIG_VITABAND_TMP102_PWM_DEMO)
-  message(STATUS "VitaBand: main = src/main_tmp102_pwm.c (CONFIG_VITABAND_TMP102_PWM_DEMO=y)")
+elseif(CONFIG_VITABAND_SPARKFUN_TMP102_DK)
+  message(STATUS "VitaBand: main = src/main_sparkfun_tmp102_dk.c (SparkFun TMP102 DK I2C)")
   target_sources(app PRIVATE
-    src/main_tmp102_pwm.c
-    drivers/src/tmp102.c
+    src/main_sparkfun_tmp102_dk.c
   )
 else()
   message(STATUS "VitaBand: main = src/main.c (full application)")
