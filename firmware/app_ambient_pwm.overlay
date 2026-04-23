@@ -76,8 +76,8 @@
 	pinctrl-names = "default", "sleep";
 	clock-frequency = <100000>;
 
-	sht3xdis: sht3xdis@45 {
+	sht3xdis: sht3xdis@22 {
 		compatible = "sensirion,sht3xd";
-		reg = <0x45>;
+		reg = <0x22>;
 	};
 };

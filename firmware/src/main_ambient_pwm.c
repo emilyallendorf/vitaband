@@ -27,14 +27,14 @@ int main(void)
 	printk("ambient/dbg: hyp=A bus=%s parent_ready=%d\n", bus->name,
 	       device_is_ready(bus));
 	{
-		int p44 = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
-				    0x44);
-		int p45 = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
-				    0x45);
+		int p8a = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
+				    0x8a);
+		int p22 = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
+				    0x22);
 
-		printk("ambient/dbg: hyp=B I2C clear-status write: 0x44->%d 0x45->%d "
+		printk("ambient/dbg: hyp=B I2C clear-status write: 0x8a->%d 0x22->%d "
 		       "(0=ACK; -EIO typical NACK)\n",
-		       p44, p45);
+		       p8a, p22);
 	}
 	/* #endregion */
 

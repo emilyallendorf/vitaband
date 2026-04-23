@@ -11,6 +11,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/printk.h>
 
 #if IS_ENABLED(CONFIG_BT)
 #include <zephyr/bluetooth/bluetooth.h>
@@ -21,6 +22,7 @@
 
 #include <sensors.h>
 #include <state_manager.h>
+#include <mock_sensors.h>
 #include <config.h>
 #if IS_ENABLED(CONFIG_BT)
 #include <ble.h>
@@ -282,6 +284,14 @@ static const char *vitaband_state_name(vitaband_state_t s)
 static float   base_skin_temp  = 34.0f;
 static uint8_t base_heart_rate = 72;
 
+static vitaband_state_t g_curr_state     = OK;
+static bool             g_prev_mock_feed;
+
+vitaband_state_t vitaband_current_state(void)
+{
+	return g_curr_state;
+}
+
 int main(void)
 {
 	int err = 0;
@@ -329,8 +339,6 @@ int main(void)
 		LOG_WRN("Sensors not ready or need calibration (baseline skin %.1f C)",
 			(double)base_skin_temp);
 	}
-
-	vitaband_state_t curr_state = OK;
 
 #if IS_ENABLED(CONFIG_BT)
 
@@ -415,32 +423,61 @@ int main(void)
 	for (;;) {
 		int64_t tick_start = k_uptime_get();
 
-		float   skin_temp    = read_temperature(BODY);
+		/* Advance scripted scenarios even without `test start` (was stuck otherwise). */
+		mock_sensors_update_scenario();
+
+		const bool mock_on = vitaband_test_harness_running() ||
+				     mock_sensors_scenario_active();
+
+		if (mock_on && !g_prev_mock_feed) {
+			base_skin_temp  = mock_read_temperature();
+			base_heart_rate = mock_read_heart_rate();
+			LOG_INF("Mock feed on — PSI baseline skin=%.2f C base_hr=%u",
+				(double)base_skin_temp, base_heart_rate);
+		}
+		g_prev_mock_feed = mock_on;
+
+		float skin_temp;
+		uint8_t heart_rate;
+		button_status_t btn;
+
+		if (mock_on) {
+			skin_temp    = mock_read_temperature();
+			heart_rate   = mock_read_heart_rate();
+			btn          = mock_read_button_status();
+		} else {
+			skin_temp    = read_temperature(BODY);
+			heart_rate   = read_heart_rate();
+			btn          = poll_button();
+		}
+
 		float   ambient_temp = read_temperature(AMBIENT);
 		float   humidity     = read_humidity();
-		uint8_t heart_rate   = read_heart_rate();
 
 		uint8_t psi_int =
 			calculate_risk_score(skin_temp, base_skin_temp, heart_rate, base_heart_rate);
 
-		button_status_t btn = poll_button();
-
-		vitaband_state_t next_state = determine_state(curr_state, (float)psi_int, btn);
-		if (next_state != curr_state) {
+		vitaband_state_t next_state = determine_state(g_curr_state, (float)psi_int, btn);
+		if (next_state != g_curr_state) {
+			/* printk: always visible on UART; LOG_* can be filtered by runtime level */
+			printk("\n*** STATE TRANSITION: %s -> %s | psi=%u | btn=%d ***\n",
+			       vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
+			       psi_int, (int)btn);
 			LOG_WRN("State transition: %s -> %s | psi=%u btn=%d",
-				vitaband_state_name(curr_state), vitaband_state_name(next_state),
+				vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
 				psi_int, (int)btn);
-			handle_state_transition(curr_state, next_state);
-			curr_state = next_state;
+			handle_state_transition(g_curr_state, next_state);
+			g_curr_state = next_state;
 		}
 
-		LOG_INF("skin=%.2f amb=%.2f hum=%.0f%% hr=%u psi=%u state=%s btn=%d",
+		LOG_DBG("skin=%.2f amb=%.2f hum=%.0f%% hr=%u psi=%u state=%s btn=%d mock=%d",
 			(double)skin_temp, (double)ambient_temp, (double)humidity,
-			heart_rate, psi_int, vitaband_state_name(curr_state), (int)btn);
+			heart_rate, psi_int, vitaband_state_name(g_curr_state), (int)btn,
+			mock_on ? 1 : 0);
 
 #if IS_ENABLED(CONFIG_BT)
 		if (vitaband_health_notify_enabled()) {
-			(void)vitaband_health_notify(heart_rate, skin_temp, ambient_temp, curr_state);
+			(void)vitaband_health_notify(heart_rate, skin_temp, ambient_temp, g_curr_state);
 		}
 
 		if (atomic_test_and_clear_bit(ble_state, STATE_CONNECTED)) {

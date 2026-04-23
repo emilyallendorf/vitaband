@@ -349,6 +349,11 @@ void mock_sensors_stop_scenario(void)
     LOG_INF("Scenario stopped");
 }
 
+bool mock_sensors_scenario_active(void)
+{
+	return scenario_active;
+}
+
 void mock_sensors_update_scenario(void)
 {
     if (!scenario_active || current_scenario >= SCENARIO_COUNT) {

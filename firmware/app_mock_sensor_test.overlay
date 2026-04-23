@@ -1,0 +1,136 @@
+/*
+ * Mock sensor shell test (full app: main.c + test.c + drivers).
+ *
+ * - Shell / printk on UART0 (DK USB serial).
+ * - Minimal haptics: pwm0 → P0.05 (buzzer alias), GPIO P0.06 (motor-en alias).
+ * - Stub sensor nodes so drivers compile: TMP117 + SHT3x on I2C0 (DK Arduino P0.26/27),
+ *   MAX86140 on SPI3 (same as app_max86140_hr.overlay).
+ *
+ *   west build ... -DDTC_OVERLAY_FILE=app_mock_sensor_test.overlay
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/ {
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+	};
+
+	aliases {
+		buzzer = &pwm_buzzer_led;
+		motor-en = &vibration_gpio_line;
+	};
+
+	motor_gpios {
+		compatible = "gpio-leds";
+		vibration_gpio_line: vibration_gpio_line {
+			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+			label = "motor-en";
+		};
+	};
+
+	pwm_buzzer_group {
+		compatible = "pwm-leds";
+		pwm_buzzer_led: pwm_buzzer_led {
+			pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+			label = "buzzer-pwm";
+		};
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+&pinctrl {
+	i2c0_mock: i2c0_mock {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 27)>,
+				<NRF_PSEL(TWIM_SDA, 0, 26)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c0_mock_sleep: i2c0_mock_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 27)>,
+				<NRF_PSEL(TWIM_SDA, 0, 26)>;
+			low-power-enable;
+		};
+	};
+
+	pwm0_mock_test: pwm0_mock_test {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+
+	pwm0_mock_test_sleep: pwm0_mock_test_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	compatible = "nordic,nrf-twim";
+	pinctrl-0 = <&i2c0_mock>;
+	pinctrl-1 = <&i2c0_mock_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+
+	tmp117: tmp117@49 {
+		compatible = "ti,tmp117";
+		reg = <0x49>;
+	};
+
+	sht3xdis: sht3xdis@44 {
+		compatible = "sensirion,sht3xd";
+		reg = <0x44>;
+	};
+};
+
+&spi3 {
+	max86140: maxim_max86140@0 {
+		compatible = "maxim,max86140";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+	};
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_mock_test>;
+	pinctrl-1 = <&pwm0_mock_test_sleep>;
+	pinctrl-names = "default", "sleep";
+};

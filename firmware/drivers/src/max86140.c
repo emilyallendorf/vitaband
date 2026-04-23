@@ -1,9 +1,21 @@
 #include "max86140.h"
+#include <errno.h>
 #include <stdbool.h>
 #include <zephyr/kernel.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/spi.h>
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_CS_GPIO_DEBUG)
+#include <zephyr/drivers/gpio.h>
+#if IS_ENABLED(CONFIG_GPIO_NRFX)
+#include <zephyr/dt-bindings/gpio/nordic-nrf-gpio.h>
+#endif
+#if defined(CONFIG_SOC_SERIES_NRF52X)
+#include <hal/nrf_gpio.h>
+#endif
+#endif
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
+#include <limits.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
@@ -33,7 +45,7 @@ LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
 /* PPG Sync / Config */
 #define REG_PPG_SYNC_CTRL   0x10
 #define REG_PPG_CONFIG_1    0x11   /* PPG_ADC_RGE, PPG_TINT, LP_MODE */
-#define REG_PPG_CONFIG_2    0x12   /* PPG_SR[4:0], PPG_LED_SETLNG[1:0] */
+#define REG_PPG_CONFIG_2    0x12   /* PPG_SR[4:0] @ [7:3], SMP_AVE[2:0] @ [2:0] */
 #define REG_PPG_CONFIG_3    0x13   /* PD_BIAS */
 
 /* LED Sequence Control (which LED fires each slot) */
@@ -77,21 +89,28 @@ LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
 #define SYS_SHDN            (1 << 1)
 
 /* ── PPG Config 1 ──
- *   [7:6] PPG1_ADC_RGE   0=4μA 1=8μA 2=16μA 3=32μA
+ *   [7:6] PPG1_ADC_RGE   0=4μA 1=8μA 2=16μA 3=32μA — larger FS ⇒ same photocurrent ⇒ lower codes (fights ADC rail).
  *   [5:4] PPG_TINT       0=14.8μs 1=29.4μs 2=58.7μs 3=117.3μs
  *   [1]   LP_MODE        1=low-power
  */
 #define PPG_ADC_RGE_16UA    (0x2 << 6)
+#define PPG_ADC_RGE_32UA    (0x3 << 6)
 #define PPG_TINT_117US      (0x3 << 4)
 #define PPG_LP_MODE         (1 << 1)
 
-/* ── PPG Config 2 ──
- *   [7:3] PPG_SR         sample rate code (see Table in datasheet)
- *         0x07 = 100 sps, 0x09 = 200 sps
- *   [1:0] LED_SETLNG     settling time 0=6μs 1=6μs 2=12μs 3=12μs
+/* ── PPG Config 2 (0x12): PPG_SR[4:0] in bits [7:3], SMP_AVE[2:0] in [2:0] ──
+ *   Datasheet Rev 5 table “PPG Configuration 2”: code is **5-bit PPG_SR**, not raw Hz.
+ *   With **2 LED exposures** (IR+Red), use a row with **Pulses Per Sample N = 2**:
+ *     0x07 → ~50 sps   (N=2)   — **not** 100 Hz
+ *     0x09 → ~100 sps  (N=2)   — matches LED_SEQ_1 with LED1+LED2
+ *     0x04 → ~200 sps  (N=1)   — IR-only LED seq; one FIFO word per tick (IR tag).
+ *     0x05 → ~400 sps  (N=1)   — IR-only.
+ *   Wrong code + SAMPLE_RATE_HZ mismatch → BPM scaled wrong (~2× high when using 0x07).
  */
-#define PPG_SR_100SPS       (0x07 << 3)
-#define PPG_LED_SETLNG_6US  (0x00)
+#define PPG_SR_100SPS       ((0x09U << 3) & 0xF8U)
+#define PPG_SR_200SPS_N1    ((0x04U << 3) & 0xF8U)
+#define PPG_SR_400SPS_N1    ((0x05U << 3) & 0xF8U)
+#define PPG_SMP_AVE_1       (0x00) /* SMP_AVE[2:0]=000 → no on-chip averaging */
 
 /* ── LED sequence codes (LEDC register values) ──
  *   0x0 = none, 0x1 = LED1, 0x2 = LED2, 0x9 = direct ambient
@@ -105,37 +124,87 @@ LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
 #define MAX86140_PART_ID    0x24
 
 /* ══════════════════════════════════════════════════════════════════════════
- * SPI FRAMING
+ * SPI FRAMING (datasheet “Single-Word SPI…” + MAX86141_Arduino reference)
  *
- * Every SPI transaction has a 2-byte header:
- *   Byte 0:  reg_addr[6:0] | R/W   (R=1, W=0)
- *   Byte 1:  dummy byte for read / data byte for single-byte write
+ * Every word is 3 bytes / 24 SCLK rising edges while CSB is low:
+ *   Byte 0: register address A[7:0] (no R/W stuffed into this byte).
+ *   Byte 1: command — 0xFF = read, 0x00 = write (READ_EN / WRITE_EN).
+ *   Byte 2: data byte read from or written to that register.
  *
- * FIFO burst read appends N*3 data bytes after the 2-byte header.
- * The nRF52840 SPIM can handle this in one transfer.
+ * Clock: SPI mode 3 (Maxim reference drivers; Mode 0 also matches Fig.34 idle-low —
+ *   use mode 3 if FIFO reads 0xFF… or saturated garbage.)
+ *
+ * FIFO burst (datasheet FIFO section): first **16** clocks = byte0 address +
+ * byte1 read command (same as starting a normal read at FIFO_DATA), then
+ * **24 clocks per FIFO word** (3 bytes/sample) in one CS assertion.
  * ══════════════════════════════════════════════════════════════════════════ */
-#define SPI_READ_BIT        0x80
-#define SPI_WRITE_BIT       0x00
+#define MAX86140_CMD_WRITE  0x00U
+#define MAX86140_CMD_READ   0xFFU
 
 /* ══════════════════════════════════════════════════════════════════════════
  * CONSTANTS
  * ══════════════════════════════════════════════════════════════════════════ */
 #define SAMPLES_PER_READ    32
-#define BYTES_PER_SAMPLE    3      /* 19-bit left-justified + 3-bit tag */
-/* Two active LED slots (IR + Red) → 2 FIFO words (6 bytes) per PPG frame */
+#define BYTES_PER_SAMPLE    3      /* 24-bit FIFO word over 3 bytes */
+/*
+ * IR+Red N=2: two FIFO words per IR sample (IR then red).
+ * IR-only N=1: one word per IR sample — allow a larger burst so ~200/400 sps does not
+ * truncate FIFO_DATA_COUNT when the host polls every ~220 ms.
+ */
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
 #define MAX_FIFO_WORDS      (SAMPLES_PER_READ * 2)
-#define MIN_HEART_RATE      40
+#define FIFO_IR_WORD_STRIDE 2
+#else
+#define MAX_FIFO_WORDS      (SAMPLES_PER_READ * 4)
+#define FIFO_IR_WORD_STRIDE 1
+#endif
+#define MIN_HEART_RATE      35
 #define MAX_HEART_RATE      220
-#define SAMPLE_RATE_HZ      100
+/*
+ * Min time between HR-producing peaks. Arm motion adds extra bumps — slightly wider
+ * than 250 ms rejects duplicate peaks within one beat (~214 BPM ceiling).
+ */
+#define HR_MIN_PEAK_INTERVAL_MS  280U
 
 /*
- * FIFO data format (datasheet Table 6):
- *   Byte 0: [D[18:11]]
- *   Byte 1: [D[10:3]]
- *   Byte 2: [D[2:0] | TAG[2:0]] — lower 3 bits are the FIFO tag
- * Data is left-justified → shift right by 3 to get the 19-bit ADC value.
+ * Finger off: empty FIFO streak. main_max86140_hr polls at SAMPLE_PERIOD_MS (~220 ms);
+ * 20 loops ≈ 4.4 s without FIFO data before HR state clears.
  */
-#define FIFO_DATA_MASK      0x7FFFF8UL   /* bits [23:3] → 19 bits after >>3 */
+#define HR_EMPTY_FIFO_LOOPS   20U
+
+/* IR ADC rail (~19-bit max). Flatline at rail ⇒ no PP ⇒ HR=0 — dim LEDs. */
+#define IR_SAT_FLAT_MIN_PP    4000    /* below this PP while near rail = useless for peaks */
+#define IR_SAT_NEAR_FULL      480000  /* react before hard-clamp at 524287 */
+#define LED_PA_STEP           8
+#define LED_PA_FLOOR          0x10
+#define LED_PA_INIT           0x48    /* prior “kinda working” bring-up level; autogain still trims rail-flat */
+/*
+ * Nominal IR sample rate — must match Kconfig PPG mode + init() PPG_SR & LED seq.
+ */
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_400_IR)
+#define SAMPLE_RATE_HZ  400
+#elif IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_200_IR)
+#define SAMPLE_RATE_HZ  200
+#else
+#define SAMPLE_RATE_HZ  100
+#endif
+/*
+ * FIFO word — Rev.5 Table 6 + datasheet FIFO read pseudo-code:
+ *   TAG[4:0] = FIFO_DATA[23:19];  ADC = FIFO_DATA[18:0] (mask lower 19 bits).
+ *   Equivalently: tag = (MSB_byte >> 3) & 0x1F; adc = raw24 & 0x7FFFF.
+ * Table 3: PPG1 LEDC1 (IR) = tag 0x01, LEDC2 (Red) = 0x02.
+ */
+#define FIFO_TAG_IR         0x01U
+
+static inline uint32_t max86140_fifo_tag(uint32_t raw24)
+{
+    return (raw24 >> 19) & 0x1FU;
+}
+
+static inline uint32_t max86140_fifo_adc_u19(uint32_t raw24)
+{
+    return raw24 & 0x7FFFFU;
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
  * SPI DEVICE — from devicetree
@@ -144,13 +213,92 @@ static const struct spi_dt_spec spi_dev =
     SPI_DT_SPEC_GET(DT_NODELABEL(max86140),
                     SPI_OP_MODE_MASTER |
                     SPI_WORD_SET(8)    |
-                    SPI_TRANSFER_MSB,
+                    SPI_TRANSFER_MSB |
+                    SPI_MODE_CPOL |
+                    SPI_MODE_CPHA,
                     0);
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_CS_GPIO_DEBUG)
+/*
+ * CS from spi { cs-gpios } — SPI_CS_GPIOS_DT_SPEC_GET(max86140).
+ *
+ * Nordic: OR in NRF_GPIO_DRIVE_* (recommended H0H1); bare GPIO_OUTPUT can fall
+ * through S0S1 depending on toolchain but explicit drive is safest.
+ *
+ * gpio_pin_set(port,pin,val) sets **physical** output level (not gpio_pin_set_dt).
+ *
+ * nrf_gpio PORT->OUT readback proves the SoC latched LOW/HIGH without probing P0.xx.
+ */
+#define CS_DBG_HOLD_MS 10000U
+
+static unsigned int cs_dbg_mcu_out_level(const struct gpio_dt_spec *cs)
+{
+#if defined(CONFIG_SOC_SERIES_NRF52X)
+	const struct device *p0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+
+	if (cs->port == p0) {
+		return (unsigned int)((nrf_gpio_port_out_read(NRF_P0) >> cs->pin) & 1U);
+	}
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(gpio1), okay)
+	const struct device *p1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+
+	if (cs->port == p1) {
+		return (unsigned int)((nrf_gpio_port_out_read(NRF_P1) >> cs->pin) & 1U);
+	}
+#endif
+#endif
+	return 2U;
+}
+
+static void max86140_cs_scope_probe(void)
+{
+	// const struct gpio_dt_spec cs =
+	// 	SPI_CS_GPIOS_DT_SPEC_GET(DT_NODELABEL(max86140));
+
+	// printk("max86140 cs-debug: MCU_OUT reads nRF PORT OUT reg (no probe needed).\n");
+	// printk("max86140 cs-debug: MCU_OUT ok but CSB stuck high → past MCU (shifter/wrong pad).\n");
+
+	// if (!gpio_is_ready_dt(&cs)) {
+	// 	printk("max86140 cs-debug: no gpio CS in DT (hw CS only?)\n");
+	// 	return;
+	// }
+
+	gpio_flags_t flags = GPIO_OUTPUT_HIGH;
+#if IS_ENABLED(CONFIG_GPIO_NRFX)
+	flags |= NRF_GPIO_DRIVE_H0H1;
+#endif
+
+	/* Bypass DT phandle — directly grab P0.14 */
+    const struct device *gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+
+    if (!device_is_ready(gpio0)) {
+        printk("gpio0 not ready!\n");
+        return -ENODEV;
+    }
+
+    while (1) {
+        gpio_pin_configure(gpio0, 14, flags);   /* drive high */
+        printk("P0.14 HIGH — measure now\n");
+        k_msleep(3000);
+
+        gpio_pin_set(gpio0, 14, 0);   /* drive low */
+        printk("P0.14 LOW — measure now\n");
+        k_msleep(3000);
+    }
+    gpio_pin_configure(gpio0, 14, GPIO_OUTPUT_ACTIVE);   /* drive high */
+    printk("P0.14 HIGH — measure now\n");
+    k_msleep(1000);
+
+    gpio_pin_set(gpio0, 14, 0);   /* drive low */
+    printk("P0.14 LOW — measure now\n");
+    k_msleep(10000);
+}
+#endif
 
 /* ══════════════════════════════════════════════════════════════════════════
  * STATIC BUFFERS
  * ══════════════════════════════════════════════════════════════════════════ */
-/* Worst-case burst: header + up to MAX_FIFO_WORDS 3-byte samples (IR+Red pairs) */
+/* Worst-case burst: 2-byte header (REG + READ cmd) + FIFO payload */
 #define TX_BUF_LEN   (2 + MAX_FIFO_WORDS * BYTES_PER_SAMPLE)
 #define RX_BUF_LEN   (2 + MAX_FIFO_WORDS * BYTES_PER_SAMPLE)
 
@@ -161,12 +309,32 @@ static int32_t ir_samples[SAMPLES_PER_READ];
 
 /* Heart rate state */
 static uint8_t  calculated_hr   = 0;
-static uint32_t last_peak_time  = 0;
+static uint8_t  hr_output_ema   = 0; /* smoothed BPM; cleared on signal loss */
+/* Monotonic IR-sample index — peak times = (tick * dt_ms), valid across FIFO reads */
+static uint32_t ir_sample_index = 0;
+static uint32_t last_peak_tick  = 0;
+static int32_t  hr_baseline_val = 0;
+static bool     hr_baseline_ready;
 
-/* ══════════════════════════════════════════════════════════════════════════
- * Agent debug NDJSON (session 75362d) — printk lines; save RTT to workspace log.
- * ══════════════════════════════════════════════════════════════════════════ */
-/* #region agent log */
+/* Mirrors REG_LED{1,2}_PA — auto-dim on IR rail-flat saturation */
+static uint8_t  led_pa_ir   = LED_PA_INIT;
+static uint8_t  led_pa_red  = LED_PA_INIT;
+
+static void hr_contact_lost_reset(void)
+{
+    calculated_hr = 0;
+    hr_output_ema = 0;
+    last_peak_tick = 0;
+    hr_baseline_ready = false;
+    hr_baseline_val = 0;
+}
+
+/* LED PA step-down only — keep baseline + EMA; reset peak anchor so intervals stay valid after gain change */
+static void hr_reanchor_after_led_autogain(void)
+{
+    last_peak_tick = 0U;
+}
+
 static uint8_t  dbg_fifo_reg_count;
 static uint8_t  dbg_fifo_words;
 static uint8_t  dbg_fifo_n;
@@ -180,25 +348,7 @@ static uint32_t dbg_cand_bpm;
 static uint8_t  dbg_rejected;
 static uint8_t  dbg_baseline_ready;
 
-static void hr_agent_emit(uint32_t ts, const char *hyp, const char *loc,
-			  int fifo_ret)
-{
-	char b[320];
-
-	snprintk(b, sizeof(b),
-		 "{\"sessionId\":\"75362d\",\"timestamp\":%u,\"hypothesisId\":\"%s\",\"location\":\"%s\","
-		 "\"message\":\"hr_snapshot\",\"data\":{\"fifoRet\":%d,\"fifoReg\":%u,\"words\":%u,"
-		 "\"n\":%u,\"irMin\":%d,\"irMax\":%d,\"mean\":%d,\"thr\":%d,\"peaks\":%u,"
-		 "\"ivMs\":%u,\"candBpm\":%u,\"rej\":%u,\"baseRdy\":%u,\"hr\":%u}}\n",
-		 ts, hyp, loc, fifo_ret, dbg_fifo_reg_count, dbg_fifo_words, dbg_fifo_n,
-		 dbg_ir_min, dbg_ir_max, dbg_mean, dbg_thresh, dbg_peak_count,
-		 dbg_interval_ms, dbg_cand_bpm, (unsigned int)dbg_rejected,
-		 (unsigned int)dbg_baseline_ready, calculated_hr);
-	printk("%s", b);
-}
-/* #endregion */
-
-/* Human-readable RTT lines (CONFIG_LOG=n — LOG_* does not print). Rate-limited. */
+/* Rate-limited diagnostic (default log level hides unless LOG_DBG enabled). */
 static void max86140_rtt_status(uint32_t t, int fifo_ret, bool have_ir_batch)
 {
 	static uint32_t last_ms;
@@ -209,17 +359,16 @@ static void max86140_rtt_status(uint32_t t, int fifo_ret, bool have_ir_batch)
 	last_ms = t;
 
 	if (!have_ir_batch) {
-		printk("max86140: fifo_ret=%d fifo_reg=%u (waiting for FIFO / SPI)\n",
-		       fifo_ret, (unsigned int)dbg_fifo_reg_count);
+		LOG_DBG("fifo_ret=%d fifo_reg=%u (waiting for FIFO / SPI)", fifo_ret,
+			(unsigned int)dbg_fifo_reg_count);
 		return;
 	}
 
-	printk("max86140: n=%u fifo_reg=%u ir_min=%d ir_max=%d mean=%d thr=%d "
-	       "peaks=%u iv_ms=%u cand_bpm=%u rej=%u hr=%u\n",
-	       (unsigned int)dbg_fifo_n, (unsigned int)dbg_fifo_reg_count,
-	       dbg_ir_min, dbg_ir_max, dbg_mean, dbg_thresh,
-	       (unsigned int)dbg_peak_count, dbg_interval_ms, dbg_cand_bpm,
-	       (unsigned int)dbg_rejected, calculated_hr);
+	LOG_DBG("n=%u fifo_reg=%u ir_min=%d ir_max=%d mean=%d thr=%d peaks=%u iv_ms=%u "
+		"cand_bpm=%u rej=%u hr=%u",
+		(unsigned int)dbg_fifo_n, (unsigned int)dbg_fifo_reg_count, dbg_ir_min,
+		dbg_ir_max, dbg_mean, dbg_thresh, (unsigned int)dbg_peak_count,
+		dbg_interval_ms, dbg_cand_bpm, (unsigned int)dbg_rejected, calculated_hr);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -231,12 +380,29 @@ static void max86140_rtt_status(uint32_t t, int fifo_ret, bool have_ir_batch)
  */
 static int max86140_write_reg(uint8_t reg, uint8_t val)
 {
-    uint8_t tx[2] = { reg & ~SPI_READ_BIT, val };
+    uint8_t tx[3] = { reg, MAX86140_CMD_WRITE, val };
 
-    struct spi_buf tx_spi = { .buf = tx, .len = 2 };
+    struct spi_buf tx_spi = { .buf = tx, .len = 3 };
     struct spi_buf_set tx_set = { .buffers = &tx_spi, .count = 1 };
 
-    return spi_write_dt(&spi_dev, &tx_set);
+    int ret = spi_write_dt(&spi_dev, &tx_set);
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
+    /* #region agent log */
+    {
+        static uint32_t agent_spi_writes;
+
+        if (++agent_spi_writes <= 12U) {
+            printk("{\"sessionId\":\"75362d\",\"runId\":\"spi-cmd\",\"hypothesisId\":\"H3\","
+                   "\"location\":\"max86140.c:max86140_write_reg\",\"message\":\"spi_tx\","
+                   "\"data\":{\"ret\":%d,\"reg\":\"0x%02x\",\"val\":\"0x%02x\",\"n\":%u},"
+                   "\"timestamp\":%u}\n",
+                   ret, reg, val, (unsigned int)agent_spi_writes,
+                   (unsigned int)k_uptime_get_32());
+        }
+    }
+    /* #endregion */
+#endif
+    return ret;
 }
 
 /**
@@ -244,17 +410,34 @@ static int max86140_write_reg(uint8_t reg, uint8_t val)
  */
 static int max86140_read_reg(uint8_t reg, uint8_t *val)
 {
-    uint8_t tx[2] = { reg | SPI_READ_BIT, 0x00 };
-    uint8_t rx[2] = { 0 };
+    uint8_t tx[3] = { reg, MAX86140_CMD_READ, 0x00 };
+    uint8_t rx[3] = { 0 };
 
-    struct spi_buf tx_spi = { .buf = tx, .len = 2 };
-    struct spi_buf rx_spi = { .buf = rx, .len = 2 };
+    struct spi_buf tx_spi = { .buf = tx, .len = 3 };
+    struct spi_buf rx_spi = { .buf = rx, .len = 3 };
     struct spi_buf_set tx_set = { .buffers = &tx_spi, .count = 1 };
     struct spi_buf_set rx_set = { .buffers = &rx_spi, .count = 1 };
 
     int ret = spi_transceive_dt(&spi_dev, &tx_set, &rx_set);
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
+    /* #region agent log */
+    {
+        static uint32_t agent_spi_reads;
+
+        if (++agent_spi_reads <= 48U) {
+            printk("{\"sessionId\":\"75362d\",\"runId\":\"spi-cmd\",\"hypothesisId\":\"H1_H2\","
+                   "\"location\":\"max86140.c:max86140_read_reg\",\"message\":\"spi_rx\","
+                   "\"data\":{\"ret\":%d,\"reg\":\"0x%02x\",\"tx0\":\"0x%02x\",\"tx1\":\"0x%02x\","
+                   "\"rx0\":\"0x%02x\",\"rx1\":\"0x%02x\",\"rx2\":\"0x%02x\",\"n\":%u},\"timestamp\":%u}\n",
+                   ret, reg, tx[0], tx[1], rx[0], rx[1], rx[2],
+                   (unsigned int)agent_spi_reads,
+                   (unsigned int)k_uptime_get_32());
+        }
+    }
+    /* #endregion */
+#endif
     if (ret == 0) {
-        *val = rx[1];   /* data comes back in second byte */
+        *val = rx[2];
     }
     return ret;
 }
@@ -262,16 +445,15 @@ static int max86140_read_reg(uint8_t reg, uint8_t *val)
 /**
  * @brief Burst-read N 3-byte FIFO words from REG_FIFO_DATA.
  *
- * Header (2 bytes) + data (n_words * 3) sent/received in a single SPI transfer.
- * The nRF52840 SPIM handles up to 65535 bytes per transfer.
+ * After the 16-clock header (address byte + READ cmd), each FIFO word is 24 clocks.
  */
 static int max86140_read_fifo_burst(uint8_t n_words, uint8_t *data_out)
 {
     uint32_t total = 2 + (uint32_t)n_words * BYTES_PER_SAMPLE;
 
     memset(tx_buf, 0, total);
-    tx_buf[0] = REG_FIFO_DATA | SPI_READ_BIT;
-    tx_buf[1] = 0x00;   /* dummy */
+    tx_buf[0] = REG_FIFO_DATA;
+    tx_buf[1] = MAX86140_CMD_READ;
 
     struct spi_buf tx_spi = { .buf = tx_buf, .len = total };
     struct spi_buf rx_spi = { .buf = rx_buf, .len = total };
@@ -280,7 +462,6 @@ static int max86140_read_fifo_burst(uint8_t n_words, uint8_t *data_out)
 
     int ret = spi_transceive_dt(&spi_dev, &tx_set, &rx_set);
     if (ret == 0) {
-        /* Skip the 2-byte header in rx_buf */
         memcpy(data_out, &rx_buf[2], n_words * BYTES_PER_SAMPLE);
     }
     return ret;
@@ -292,39 +473,66 @@ static int max86140_read_fifo_burst(uint8_t n_words, uint8_t *data_out)
 
 int max86140_init(void)
 {
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_CS_GPIO_DEBUG)
+	max86140_cs_scope_probe();
+#endif
+
     if (!spi_is_ready_dt(&spi_dev)) {
         LOG_ERR("SPI bus not ready for MAX86140");
         printk("max86140: SPI bus not ready\n");
         return -ENODEV;
     }
-    printk("max86140: SPI ok, reading Part ID…\n");
-
-    /* ── 1. Read and verify Part ID ── */
-    uint8_t part_id = 0;
-    int ret = max86140_read_reg(REG_PART_ID, &part_id);
-    if (ret != 0) {
-        LOG_ERR("Failed to read Part ID: %d", ret);
-        printk("max86140: Part ID read failed ret=%d\n", ret);
-        return ret;
-    }
-    if (part_id != MAX86140_PART_ID) {
-        LOG_WRN("Unexpected Part ID: 0x%02x (expected 0x%02x)",
-                part_id, MAX86140_PART_ID);
-        printk("max86140: WARN part_id=0x%02x expect 0x%02x (wrong chip or bad SPI)\n",
-               part_id, MAX86140_PART_ID);
-    } else {
-        LOG_INF("MAX86140 detected. Part ID: 0x%02x", part_id);
-        printk("max86140: Part ID 0x%02x OK\n", part_id);
-    }
-
-    /* ── 2. Software reset ── */
-    ret = max86140_write_reg(REG_SYSTEM_CTRL, SYS_RESET);
+    /* ── 1. Software reset, then Part ID — read after reset avoids junk at cold start ── */
+    int ret = max86140_write_reg(REG_SYSTEM_CTRL, SYS_RESET);
     if (ret != 0) {
         LOG_ERR("Reset failed: %d", ret);
         printk("max86140: reset write failed ret=%d\n", ret);
         return ret;
     }
-    k_msleep(10);   /* datasheet: allow POR to complete */
+    k_msleep(10);   /* datasheet: allow reset / POR to complete */
+
+    uint8_t part_id = 0;
+    while (part_id == 0 || part_id == 0xFF) {
+        ret = max86140_read_reg(REG_PART_ID, &part_id);
+        if (ret != 0) {
+            LOG_ERR("Failed to read Part ID: %d", ret);
+            printk("max86140: Part ID read failed ret=%d\n", ret);
+            return ret;
+        }
+        if (part_id != MAX86140_PART_ID) {
+            LOG_ERR("Unexpected Part ID: 0x%02x (expected 0x%02x)",
+                    part_id, MAX86140_PART_ID);
+            printk("max86140: Part ID 0x%02x — abort (expect part 0x%02x)\n",
+                part_id, MAX86140_PART_ID);}
+            k_msleep(100);   /* wait for sensor to respond after reset */
+    }
+    ret = max86140_read_reg(REG_PART_ID, &part_id);
+    if (ret != 0) {
+        LOG_ERR("Failed to read Part ID: %d", ret);
+        printk("max86140: Part ID read failed ret=%d\n", ret);
+        return ret;
+    }
+
+    uint8_t rev_id = 0;
+    max86140_read_reg(REG_REV_ID, &rev_id);
+
+    if (part_id != MAX86140_PART_ID) {
+        LOG_ERR("Unexpected Part ID: 0x%02x (expected 0x%02x)",
+                part_id, MAX86140_PART_ID);
+        printk("max86140: Part ID 0x%02x rev 0x%02x — abort (expect part 0x%02x)\n",
+               part_id, rev_id, MAX86140_PART_ID);
+        printk("max86140: hint 0x00 = MISO low / wrong SPI mode / bad level shift / overlay\n");
+        return -EIO;
+    }
+    LOG_INF("MAX86140 detected. Part ID: 0x%02x", part_id);
+
+    /* Clear LED range scaling (31 mA full scale per channel); stale non-zero skews PA. */
+    ret = max86140_write_reg(REG_LED_RANGE_1, 0x00);
+    if (ret != 0) {
+        LOG_ERR("LED_RANGE_1 failed: %d", ret);
+        printk("max86140: LED_RANGE_1 failed ret=%d\n", ret);
+        return ret;
+    }
 
     /* ── 3. Configure FIFO ──
      *   FIFO_CONFIG_1: A_FULL threshold = 0x10 (interrupt at 112 samples)
@@ -349,31 +557,44 @@ int max86140_init(void)
      *   ADC range: 16μA, integration time: 117.3μs, LP_MODE on
      *   Sample rate: 100 sps, LED settling: 6μs
      */
+    /* LP_MODE off for bring-up — re-enable later for power saving (≤128 sps only). */
     ret = max86140_write_reg(REG_PPG_CONFIG_1,
-                             PPG_ADC_RGE_16UA | PPG_TINT_117US | PPG_LP_MODE);
+                             PPG_ADC_RGE_32UA | PPG_TINT_117US);
     if (ret != 0) {
         LOG_ERR("PPG config 1 failed: %d", ret);
         printk("max86140: PPG_CONFIG_1 failed ret=%d\n", ret);
         return ret;
     }
 
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_400_IR)
     ret = max86140_write_reg(REG_PPG_CONFIG_2,
-                             PPG_SR_100SPS | PPG_LED_SETLNG_6US);
+                             PPG_SR_400SPS_N1 | PPG_SMP_AVE_1);
+#elif IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_200_IR)
+    ret = max86140_write_reg(REG_PPG_CONFIG_2,
+                             PPG_SR_200SPS_N1 | PPG_SMP_AVE_1);
+#else
+    ret = max86140_write_reg(REG_PPG_CONFIG_2,
+                             PPG_SR_100SPS | PPG_SMP_AVE_1);
+#endif
     if (ret != 0) {
         LOG_ERR("PPG config 2 failed: %d", ret);
         printk("max86140: PPG_CONFIG_2 failed ret=%d\n", ret);
         return ret;
     }
-
     /* ── 5. Configure LED sequence ──
      *   Slot 1: LED1 (IR)
      *   Slot 2: LED2 (Red)  — useful if you want SpO2 later
      *   Slots 3-6: disabled
      *
      *   REG_LED_SEQ_1 = [LEDC2 | LEDC1] = [LED2 << 4 | LED1]
+     *   IR-only fast modes (N=1): only LED1 in slot 1 (red off) per datasheet N=1 path.
      */
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
     ret = max86140_write_reg(REG_LED_SEQ_1,
                              (LEDC_LED2 << 4) | LEDC_LED1);
+#else
+    ret = max86140_write_reg(REG_LED_SEQ_1, LEDC_LED1);
+#endif
     if (ret != 0) {
         LOG_ERR("LED seq 1 failed: %d", ret);
         printk("max86140: LED_SEQ_1 failed ret=%d\n", ret);
@@ -394,23 +615,45 @@ int max86140_init(void)
         return ret;
     }
 
-    /* ── 6. Set LED pulse amplitudes ~~25 mA each ──
-     *   With LEDx_RGE = 0x0 (31 mA full scale), 0x7F ≈ 15.5 mA
-     */
-    ret = max86140_write_reg(REG_LED1_PA, 0x7F);
+    /* ── 6. Set LED pulse amplitudes (see LED_PA_INIT — high PA ⇒ IR rail / ac=0 / HR stuck) ── */
+    led_pa_ir = LED_PA_INIT;
+    led_pa_red = LED_PA_INIT;
+
+    ret = max86140_write_reg(REG_LED1_PA, led_pa_ir);
     if (ret != 0) {
         LOG_ERR("LED1 PA failed: %d", ret);
         printk("max86140: LED1_PA failed ret=%d\n", ret);
         return ret;
     }
 
-    ret = max86140_write_reg(REG_LED2_PA, 0x7F);
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
+    ret = max86140_write_reg(REG_LED2_PA, led_pa_red);
     if (ret != 0) {
         LOG_ERR("LED2 PA failed: %d", ret);
         printk("max86140: LED2_PA failed ret=%d\n", ret);
         return ret;
     }
-    printk("max86140: LEDs scheduled (IR+Red), PA=0x7F each, 100 sps\n");
+#else
+    ret = max86140_write_reg(REG_LED2_PA, 0x00);
+    if (ret != 0) {
+        LOG_ERR("LED2 PA off failed: %d", ret);
+        printk("max86140: LED2_PA off failed ret=%d\n", ret);
+        return ret;
+    }
+
+    led_pa_red = 0U;
+#endif
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_400_IR)
+    printk("max86140: ready (ADC 32µA FS, PA=0x%02x, ~400 SPS IR-only N=1)\n",
+           led_pa_ir);
+#elif IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_200_IR)
+    printk("max86140: ready (ADC 32µA FS, PA=0x%02x, ~200 SPS IR-only N=1)\n",
+           led_pa_ir);
+#else
+    printk("max86140: ready (ADC 32µA FS, PA=0x%02x, ~100 SPS IR+Red N=2)\n",
+           led_pa_ir);
+#endif
 
     /* ── 7. Enable interrupts: A_FULL and PPG_RDY ── */
     ret = max86140_write_reg(REG_INT_ENABLE_1, INT_A_FULL | INT_PPG_RDY);
@@ -452,7 +695,10 @@ int max86140_init(void)
     }
 
     LOG_INF("MAX86140 initialized successfully");
-    printk("max86140: init done (running, out of shutdown)\n");
+
+    /* Fresh HR state matches a freshly configured part (avoids stale EMA across experiments). */
+    hr_contact_lost_reset();
+
     return 0;
 }
 
@@ -480,27 +726,25 @@ static int max86140_read_fifo(uint8_t *sample_count_out, int32_t *ir_out)
     }
 
     /*
-     * REG_FIFO_DATA_COUNT = number of 3-byte words in the FIFO (datasheet).
-     * Two LED slots per frame → words is even: [IR][Red][IR][Red]...
+     * REG_FIFO_DATA_COUNT = number of 3-byte FIFO words (datasheet).
+     * IR+Red N=2: sequence [IR][Red][IR][Red]… — align to first IR tag, stride 2.
+     * IR-only N=1: each word is IR — stride 1 after first IR tag.
      */
     uint8_t words = fifo_count;
+
     if (words > MAX_FIFO_WORDS) {
         words = MAX_FIFO_WORDS;
     }
-    if ((words & 1U) != 0U) {
-        words--;
-    }
+
     if (words == 0U) {
-        dbg_fifo_words = words;
+        dbg_fifo_words = 0;
         dbg_fifo_n = 0;
         *sample_count_out = 0;
         return 0;
     }
 
-    uint8_t n = words / 2U; /* IR samples (one per IR+Red pair), ≤ SAMPLES_PER_READ */
     /* #region agent log */
     dbg_fifo_words = words;
-    dbg_fifo_n = n;
     /* #endregion */
 
     static uint8_t raw[MAX_FIFO_WORDS * BYTES_PER_SAMPLE];
@@ -512,27 +756,61 @@ static int max86140_read_fifo(uint8_t *sample_count_out, int32_t *ir_out)
         return ret;
     }
 
-    /*
-     * Parse FIFO data.
-     * Format per sample (3 bytes, left-justified 19-bit):
-     *   raw[0] = D[18:11]
-     *   raw[1] = D[10:3]
-     *   raw[2] = D[2:0] | TAG[2:0]
-     *
-     * Extract the 19-bit value by shifting the 3 bytes into a 32-bit word
-     * and masking out the tag bits. Data is left-justified so we shift >>3.
-     */
-    for (int i = 0; i < n; i++) {
-        /* Slot 1 (IR) is the first of each pair */
-        int base = i * 6;
-        uint32_t raw32 = ((uint32_t)raw[base + 0] << 16) |
-                         ((uint32_t)raw[base + 1] << 8)  |
-                         ((uint32_t)raw[base + 2]);
-        ir_out[i] = (int32_t)((raw32 >> 3) & 0x0007FFFF);   /* 19-bit value */
+    int ir_start = -1;
+
+    for (unsigned w = 0; w < (unsigned int)words; w++) {
+        int base = (int)(w * 3U);
+
+        if (raw[(size_t)base + 0U] == 0xFF && raw[(size_t)base + 1U] == 0xFF &&
+            raw[(size_t)base + 2U] == 0xFF) {
+            continue;
+        }
+
+        uint32_t raw32 = ((uint32_t)raw[(size_t)base + 0U] << 16) |
+                         ((uint32_t)raw[(size_t)base + 1U] << 8) |
+                         (uint32_t)raw[(size_t)base + 2U];
+
+        if (max86140_fifo_tag(raw32) == FIFO_TAG_IR) {
+            ir_start = (int)w;
+            break;
+        }
     }
 
-    *sample_count_out = n;
-    LOG_DBG("Read %u samples from FIFO", n);
+    if (ir_start < 0) {
+        *sample_count_out = 0;
+        /* #region agent log */
+        dbg_fifo_n = 0;
+        /* #endregion */
+        return 0;
+    }
+
+    uint8_t n_ir = 0;
+
+    for (int w = ir_start; w < (int)words && n_ir < SAMPLES_PER_READ;
+         w += FIFO_IR_WORD_STRIDE) {
+        int base = w * 3;
+
+        if (raw[(size_t)base + 0U] == 0xFF && raw[(size_t)base + 1U] == 0xFF &&
+            raw[(size_t)base + 2U] == 0xFF) {
+            continue;
+        }
+
+        uint32_t raw32 = ((uint32_t)raw[(size_t)base + 0U] << 16) |
+                         ((uint32_t)raw[(size_t)base + 1U] << 8) |
+                         (uint32_t)raw[(size_t)base + 2U];
+
+        if (max86140_fifo_tag(raw32) != FIFO_TAG_IR) {
+            continue;
+        }
+
+        ir_out[n_ir++] = (int32_t)max86140_fifo_adc_u19(raw32);
+    }
+
+    *sample_count_out = n_ir;
+    /* #region agent log */
+    dbg_fifo_n = n_ir;
+    /* #endregion */
+    LOG_DBG("Read %u IR samples (tag-checked)", (unsigned int)n_ir);
     return 0;
 }
 
@@ -543,17 +821,14 @@ static int max86140_read_fifo(uint8_t *sample_count_out, int32_t *ir_out)
  * MAX30102 driver but adapted for MAX86140's 19-bit ADC range.
  * ══════════════════════════════════════════════════════════════════════════ */
 
-static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n)
+static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch_start_tick)
 {
-    static int32_t baseline          = 0;
-    static bool    baseline_ready    = false;
-
     /* #region agent log */
     dbg_peak_count = 0;
     dbg_interval_ms = 0;
     dbg_cand_bpm = 0;
     dbg_rejected = 0;
-    dbg_baseline_ready = baseline_ready ? 1U : 0U;
+    dbg_baseline_ready = hr_baseline_ready ? 1U : 0U;
     if (n > 0) {
         dbg_ir_min = samples[0];
         dbg_ir_max = samples[0];
@@ -570,14 +845,17 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n)
 
     if (n == 0) return calculated_hr;
 
+    /* Need ≥3 IR samples for a local maximum (indices 1..n-2). */
+    if (n < 3U) return calculated_hr;
+
     /* Compute mean of this batch */
     int64_t sum = 0;
     for (int i = 0; i < n; i++) sum += samples[i];
     int32_t batch_mean = (int32_t)(sum / n);
 
-    if (!baseline_ready) {
-        baseline       = batch_mean;
-        baseline_ready = true;
+    if (!hr_baseline_ready) {
+        hr_baseline_val = batch_mean;
+        hr_baseline_ready = true;
         /* #region agent log */
         dbg_mean = batch_mean;
         dbg_thresh = 0;
@@ -585,60 +863,248 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n)
         return 0;
     }
 
-    /* Slow-tracking baseline (95% old + 5% new) */
-    baseline = (baseline * 95 + batch_mean * 5) / 100;
+    /* Slow-tracking baseline (95% old + 5% new) — display / debug only */
+    hr_baseline_val = (hr_baseline_val * 95 + batch_mean * 5) / 100;
 
-    /* Threshold a few % above baseline (PPG AC is small vs DC) */
-    int32_t delta = baseline / 15;
-    if (delta < 400) {
-        delta = 400;
+    /*
+     * Peak gate tied to THIS batch amplitude (fixes thr > max when baseline delta was huge).
+     *
+     * Wrist/arm often shows *more* local maxima than the finger (motion / strap / tissue):
+     * a loose margin lets ripples pass as peaks. Use one firm relative margin and a crest
+     * floor so only samples in the upper part of the batch swing count as systolic peaks.
+     */
+    int32_t ac_pp = dbg_ir_max - dbg_ir_min;
+
+    if (ac_pp < 1) {
+        ac_pp = 1;
     }
-    int32_t threshold = baseline + delta;
+
+    int32_t margin = ac_pp / 5;
+
+    if (margin < 34) {
+        margin = 34;
+    }
+
+    int32_t threshold = batch_mean + margin;
+
+    /* Upper ~55 % of this batch’s IR swing — rejects mid-range noise bumps on the arm */
+    int32_t crest_min = dbg_ir_min;
+
+    if (ac_pp >= 256) {
+        crest_min = dbg_ir_min + (ac_pp * 45) / 100;
+    }
 
     /* #region agent log */
     dbg_mean = batch_mean;
     dbg_thresh = threshold;
     /* #endregion */
 
-    uint32_t now_ms = k_uptime_get_32();
+    const uint32_t dt_ms = 1000U / SAMPLE_RATE_HZ;
+
+    /*
+     * Count every local maximum for PP trace, but drive HR timing from **one** peak per
+     * batch — the largest systolic candidate. Otherwise 3–5 ripples per ~220 ms window
+     * yield interval_ms ~300–400 ms → ~150–200 BPM even when the true beat is ~1 s.
+     */
+    int           best_i   = -1;
+    int32_t       best_amp = INT32_MIN;
 
     for (int i = 1; i < n - 1; i++) {
         bool is_peak = (samples[i] > samples[i - 1]) &&
                        (samples[i] > samples[i + 1]) &&
-                       (samples[i] > threshold);
+                       (samples[i] > threshold) &&
+                       (samples[i] >= crest_min);
 
-        if (is_peak) {
-            /* #region agent log */
-            dbg_peak_count++;
-            /* #endregion */
+        if (!is_peak) {
+            continue;
         }
 
-        if (is_peak && last_peak_time > 0) {
-            uint32_t interval_ms = now_ms - last_peak_time;
-            if (interval_ms > 0) {
+        /* #region agent log */
+        dbg_peak_count++;
+        /* #endregion */
+
+        if (samples[i] > best_amp) {
+            best_amp = samples[i];
+            best_i = i;
+        }
+    }
+
+    if (best_i >= 1) {
+        uint32_t peak_tick = batch_start_tick + (uint32_t)best_i;
+
+        if (last_peak_tick == 0U) {
+            last_peak_tick = peak_tick;
+        } else {
+            uint32_t dtick = (peak_tick > last_peak_tick)
+                             ? (peak_tick - last_peak_tick)
+                             : (last_peak_tick - peak_tick);
+            uint32_t interval_ms =
+                (uint32_t)((uint64_t)dtick * (uint64_t)dt_ms);
+
+            if (interval_ms < HR_MIN_PEAK_INTERVAL_MS) {
+                /* #region agent log */
+                dbg_rejected = 1;
+                dbg_interval_ms = interval_ms;
+                dbg_cand_bpm =
+                    interval_ms > 0U ? (60000U / interval_ms) : 0U;
+                /* #endregion */
+            } else {
                 uint32_t bpm = 60000U / interval_ms;
+
                 /* #region agent log */
                 dbg_interval_ms = interval_ms;
                 dbg_cand_bpm = bpm;
                 /* #endregion */
+
                 if (bpm >= MIN_HEART_RATE && bpm <= MAX_HEART_RATE) {
-                    calculated_hr = (uint8_t)bpm;
-                    LOG_DBG("HR: %u BPM (interval %u ms)", calculated_hr, interval_ms);
-                    printk("max86140: HR accept %u BPM (interval %u ms)\n",
-                           calculated_hr, interval_ms);
+                    if (hr_output_ema == 0U) {
+                        hr_output_ema = (uint8_t)bpm;
+                    } else {
+                        hr_output_ema = (uint8_t)(((uint32_t)hr_output_ema * 15U +
+                                       bpm + 8U) /
+                                      16U);
+                    }
+
+                    calculated_hr = hr_output_ema;
+                    last_peak_tick = peak_tick;
+                    LOG_DBG("HR: %u BPM (interval %u ms)", calculated_hr,
+                        interval_ms);
                 } else {
                     /* #region agent log */
                     dbg_rejected = 1;
                     /* #endregion */
+                    if (bpm < MIN_HEART_RATE) {
+                        last_peak_tick = peak_tick;
+                    }
                 }
             }
-            last_peak_time = now_ms;
-        } else if (is_peak) {
-            last_peak_time = now_ms;
         }
     }
 
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
+    /* #region agent log */
+    {
+        static uint32_t hr_agent_last;
+
+        uint32_t tu = k_uptime_get_32();
+
+        if (n >= 3U && tu - hr_agent_last >= 500U) {
+            hr_agent_last = tu;
+            printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_tick\",\"location\":\"max86140_calculate_hr\","
+                   "\"message\":\"hr_batch\",\"data\":{\"n\":%u,\"batch_start\":%u,\"last_peak_tick\":%u,"
+                   "\"peaks\":%u,\"iv_ms\":%u,\"cand_bpm\":%u,\"rej\":%u,\"hr\":%u},\"timestamp\":%u}\n",
+                   (unsigned int)n, (unsigned int)batch_start_tick,
+                   (unsigned int)last_peak_tick, (unsigned int)dbg_peak_count,
+                   dbg_interval_ms, dbg_cand_bpm, (unsigned int)dbg_rejected,
+                   (unsigned int)calculated_hr, (unsigned int)tu);
+        }
+    }
+    /* #endregion */
+#endif
+
     return calculated_hr;
+}
+
+/* Clip LED drive when IR rides the ADC rail with no pulsatile variation (logs: ac=0, IR≈524287). */
+static void max86140_ir_autogain_rail_flat(const int32_t *ir, uint8_t n)
+{
+    if (n < 8U) {
+        return;
+    }
+
+    int32_t mn = ir[0];
+    int32_t mx = ir[0];
+
+    for (int i = 1; i < n; i++) {
+        if (ir[i] < mn) {
+            mn = ir[i];
+        }
+        if (ir[i] > mx) {
+            mx = ir[i];
+        }
+    }
+
+    int32_t pp = mx - mn;
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
+    /* #region agent log */
+    {
+        static uint32_t sat_gate_last;
+
+        uint32_t tg = k_uptime_get_32();
+
+        if ((uint32_t)(tg - sat_gate_last) >= 2500U && mx >= IR_SAT_NEAR_FULL &&
+            pp <= IR_SAT_FLAT_MIN_PP) {
+            sat_gate_last = tg;
+            printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_sat_gate\",\"location\":\"auto_rail_flat\","
+                   "\"message\":\"sat_candidate\",\"data\":{\"mx\":%d,\"pp\":%d,\"pa\":%u,"
+                   "\"floor\":%u,\"thr_ok\":1},\"timestamp\":%u}\n",
+                   (int)mx, (int)pp, (unsigned int)led_pa_ir, (unsigned int)LED_PA_FLOOR,
+                   (unsigned int)tg);
+        }
+    }
+    /* #endregion */
+#endif
+
+    if (mx < IR_SAT_NEAR_FULL || pp > IR_SAT_FLAT_MIN_PP) {
+        return;
+    }
+
+    if (led_pa_ir <= LED_PA_FLOOR) {
+        return;
+    }
+
+    static uint32_t last_dim_ms;
+    uint32_t now = k_uptime_get_32();
+
+    if (now - last_dim_ms < 2000U) {
+        return;
+    }
+
+    uint8_t new_pa = (uint8_t)(led_pa_ir - LED_PA_STEP);
+
+    if (new_pa < LED_PA_FLOOR) {
+        new_pa = LED_PA_FLOOR;
+    }
+
+    int wr1 = max86140_write_reg(REG_LED1_PA, new_pa);
+    int wr2 = 0;
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
+    wr2 = max86140_write_reg(REG_LED2_PA, new_pa);
+#endif
+
+    if (wr1 != 0 || wr2 != 0) {
+        printk("max86140: LED PA dim SPI failed wr1=%d wr2=%d (tried 0x%02x)\n",
+               wr1, wr2, new_pa);
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
+        /* #region agent log */
+        printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_sat_spi\",\"location\":\"auto_rail_flat\","
+               "\"message\":\"led_dim_spi_fail\",\"data\":{\"wr1\":%d,\"wr2\":%d,\"pa\":%u},\"timestamp\":%u}\n",
+               wr1, wr2, (unsigned int)new_pa, (unsigned int)now);
+        /* #endregion */
+#endif
+        return;
+    }
+
+    last_dim_ms = now;
+    led_pa_ir = new_pa;
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
+    led_pa_red = new_pa;
+#endif
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
+    printk("max86140: IR rail-flat → LED PA=0x%02x (max=%d pp=%d)\n",
+           led_pa_ir, (int)mx, (int)pp);
+    /* #region agent log */
+    printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_sat\",\"location\":\"max86140_ir_autogain_rail_flat\","
+           "\"message\":\"led_dim\",\"data\":{\"mx\":%d,\"pp\":%d,\"pa\":%u},\"timestamp\":%u}\n",
+           (int)mx, (int)pp, (unsigned int)led_pa_ir, (unsigned int)now);
+    /* #endregion */
+#endif
+
+    hr_reanchor_after_led_autogain();
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -650,30 +1116,49 @@ uint8_t max86140_read_heartrate(void)
     uint8_t n = 0;
     int ret = max86140_read_fifo(&n, ir_samples);
     uint32_t t = k_uptime_get_32();
-
-    /* #region agent log */
-    static uint32_t agent_last_emit;
+    static uint16_t empty_fifo_streak;
 
     if (ret != 0 || n == 0) {
-        if (t - agent_last_emit >= 500U) {
-            agent_last_emit = t;
-            hr_agent_emit(t, "H4", "max86140.c:fifo_empty_or_err", ret);
+        empty_fifo_streak++;
+        if (empty_fifo_streak >= HR_EMPTY_FIFO_LOOPS) {
+            hr_contact_lost_reset();
+            empty_fifo_streak = 0U;
         }
         max86140_rtt_status(t, ret, false);
-        return calculated_hr;   /* return last known value */
+        return calculated_hr;
+    }
+
+    empty_fifo_streak = 0U;
+
+    uint32_t batch_tick = ir_sample_index;
+
+    ir_sample_index += (uint32_t)n;
+
+    max86140_calculate_hr(ir_samples, n, batch_tick);
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PP_TRACE)
+    /* #region hr_pp_trace */
+    if (n > 0U) {
+        static uint32_t pp_trace_last;
+
+        uint32_t nowp = k_uptime_get_32();
+
+        if (nowp - pp_trace_last >= 1000U) {
+            pp_trace_last = nowp;
+            printk("max86140 pp: n=%u min=%d max=%d pp=%d mean=%d thr=%d peaks=%u bpm=%u\n",
+                   (unsigned int)n, dbg_ir_min, dbg_ir_max,
+                   dbg_ir_max - dbg_ir_min,
+                   dbg_mean, dbg_thresh,
+                   (unsigned int)dbg_peak_count, (unsigned int)calculated_hr);
+        }
     }
     /* #endregion */
+#endif
 
-    uint8_t hr = max86140_calculate_hr(ir_samples, n);
+    max86140_ir_autogain_rail_flat(ir_samples, n);
 
-    /* #region agent log */
     t = k_uptime_get_32();
-    if (t - agent_last_emit >= 500U) {
-        agent_last_emit = t;
-        hr_agent_emit(t, "H1-H5", "max86140.c:fifo_ok", 0);
-    }
-    /* #endregion */
     max86140_rtt_status(t, 0, true);
 
-    return hr;
+    return calculated_hr;
 }

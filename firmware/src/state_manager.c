@@ -3,6 +3,8 @@
 
 #include <stdlib.h>
 
+bool emergency_long_press = false;
+
 
 LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_INF);
 #define BASE_CORE_TEMP_C   37.0f
@@ -115,25 +117,25 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
     } else {
         le25_start_ms = -1;
     }
-    switch (current_state) {
+    switch (curr_state) {
     case OK:
-        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 1000) {
             next_state = CRITICAL;
-        } else if (ge3_start_ms >= 0 && (now - ge3_start_ms) >= 30000) {
+        } else if (ge3_start_ms >= 0 && (now - ge3_start_ms) >= 3000) {
             next_state = WARNING;
         }
         break;
 
     case WARNING:
-        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 1000) {
             next_state = CRITICAL;
-        } else if (le25_start_ms >= 0 && (now - le25_start_ms) >= 30000) {
+        } else if (le25_start_ms >= 0 && (now - le25_start_ms) >= 3000) {
             next_state = OK;
         }
         break;
 
     case CRITICAL:
-        if (le65_start_ms >= 0 && (now - le65_start_ms) >= 15000) {
+        if (le65_start_ms >= 0 && (now - le65_start_ms) >= 1500) {
             next_state = WARNING;
         }
         break;
@@ -141,9 +143,9 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
         next_state=OK;
         break;
         
-    if (next_state != current_state) {
+    if (next_state != curr_state) {
         LOG_INF("State change: %d -> %d, psi=%.2f",
-                current_state, next_state, (double)psi);
+                curr_state, next_state, (double)psi);
         ge3_start_ms  = -1;
         ge7_start_ms  = -1;
         le65_start_ms = -1;

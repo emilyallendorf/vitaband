@@ -49,7 +49,7 @@ static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 #endif
 
 /* MOTOR_EN — GPIO; intensity maps to on/off only */
-static const struct gpio_dt_spec vibration = GPIO_DT_SPEC_GET(DT_ALIAS(vibration_motor), gpios);
+static const struct gpio_dt_spec vibration = GPIO_DT_SPEC_GET(DT_ALIAS(motor_en), gpios);
 
 /* BUZZER_EN — pwm0 channel 0 on P0.05; frequency from pwm_set_dt */
 static const struct pwm_dt_spec buzzer = PWM_DT_SPEC_GET(DT_ALIAS(buzzer));

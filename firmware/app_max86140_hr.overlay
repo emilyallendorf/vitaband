@@ -4,7 +4,8 @@
  *
  * Wire the Maxim breakout/module to **D11–D13 + D10 (CS)** and 3V3/GND.
  *
- * **VitaBand PCB:** use `app_max86140_hr_vitaband.overlay` (SPI0 on P0.12–P0.15, CS P0.13).
+ * **VitaBand PCB:** use `app_max86140_hr_vitaband.overlay` (SPI0: SCLK P0.15,
+ * MOSI P0.16, MISO P0.13, CS P0.14).
  *
  * printk: Segger RTT — uart0 disabled below.
  *

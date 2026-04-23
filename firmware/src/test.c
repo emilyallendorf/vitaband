@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include "mock_sensors.h"
 #include "state_manager.h"
+#include "power.h"
 #include "haptics.h"
 
 LOG_MODULE_REGISTER(test_harness, LOG_LEVEL_INF);
@@ -115,8 +116,7 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
 /* ========================================================================== */
 /* TEST CONTROL                                                               */
 /* ========================================================================== */
-/* Polling loop + printf/LOG + state/haptics uses more than 2 KiB in practice */
-K_THREAD_STACK_DEFINE(test_stack, 4096);
+K_THREAD_STACK_DEFINE(test_stack, 2048);
     static struct k_thread test_thread_data;
     static k_tid_t test_thread;
 
@@ -133,33 +133,23 @@ void test_harness_start(void)
     /* Initialize mock sensors */
     mock_sensors_init();
     
-    /*
-     * Do not call state_manager_init() or haptics_init() here: main() already
-     * initialized them. Re-running haptics_init() reconfigures the same LED
-     * GPIO and re-inits k_work while main's blink work may still be active.
-     *
-     * Thread priority / start delay (UART + shell):
-     * The shell runs at K_LOWEST_APPLICATION_THREAD_PRIO. If the test thread
-     * uses a *higher* priority (lower numeric value, e.g. 10), it preempts
-     * the shell immediately inside k_thread_create() and the first printk()
-     * can block on the same UART mutex the shell backend still holds while
-     * finishing the command — the thread then never appears to run.
-     *
-     * Run the harness at the same priority as the shell and defer the start
-     * slightly so "test start" completes and the shell releases TX before we
-     * printk from the new thread.
-     */
-    test_running = true;
+    // /* Initialize state manager */
+    state_manager_init();
+    
+    /* Initialize haptics */
+    haptics_init();
+    
+    /* Start test thread */
 
+    test_running = true;
+    
     test_thread = k_thread_create(&test_thread_data,
                              test_stack,
                              K_THREAD_STACK_SIZEOF(test_stack),
                              test_loop_thread,
                              NULL, NULL, NULL,
-                             0,
-                             0,
-                             K_MSEC(50));
-    printk("DEBUG: test thread scheduled (starts in 50 ms).\n");
+                             1, 0, K_NO_WAIT);
+    printk("DEBUG: k_thread_start() called successfully.\n");
 }
 
 void test_harness_stop(void)
@@ -174,6 +164,11 @@ void test_harness_stop(void)
     
     /* Stop all haptics */
     haptics_stop_all();
+}
+
+bool vitaband_test_harness_running(void)
+{
+	return test_running;
 }
 
 void test_harness_print_stats(void)
