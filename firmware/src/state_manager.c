@@ -115,7 +115,7 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
     } else {
         le25_start_ms = -1;
     }
-    switch (current_state) {
+    switch (curr_state) {
     case OK:
         if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
             next_state = CRITICAL;
@@ -141,9 +141,9 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
         next_state=OK;
         break;
         
-    if (next_state != current_state) {
+    if (next_state != curr_state) {
         LOG_INF("State change: %d -> %d, psi=%.2f",
-                current_state, next_state, (double)psi);
+                curr_state, next_state, (double)psi);
         ge3_start_ms  = -1;
         ge7_start_ms  = -1;
         le65_start_ms = -1;
