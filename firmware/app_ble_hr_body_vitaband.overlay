@@ -1,0 +1,171 @@
+/*
+ * VitaBand PCB: MAX86140 on **SPI0** (P0.15 SCK, P0.16 MOSI, P0.13 MISO, P0.14 CS) +
+ * TMP117 on **TWIM1** at **P0.26 / P0.27** (same physical pads as the standalone TMP117
+ * overlay used for TWIM0 — TWIM0 cannot run together with SPIM0 on nRF52840).
+ *
+ * west build ... -DCONF_FILE=prj_ble_hr_body.conf \
+ *   -DDTC_OVERLAY_FILE=app_ble_hr_body_vitaband.overlay
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	leds {
+		status = "disabled";
+		led0: led_0 { status = "disabled"; gpios = <&gpio0 2 GPIO_ACTIVE_LOW>; };
+		led1: led_1 { status = "disabled"; gpios = <&gpio0 3 GPIO_ACTIVE_LOW>; };
+		led2: led_2 { status = "disabled"; gpios = <&gpio0 4 GPIO_ACTIVE_LOW>; };
+		led3: led_3 { status = "disabled"; gpios = <&gpio0 7 GPIO_ACTIVE_LOW>; };
+	};
+
+	pwmleds {
+		status = "disabled";
+		pwm_led0: pwm_led_0 { status = "disabled"; };
+	};
+
+	aliases {
+		emergency-button = &emergency_button;
+		buzzer = &pwm_buzzer_led;
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		emergency_button: emergency_button {
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Emergency Button";
+		};
+	};
+
+	pwm_buzzer_group {
+		compatible = "pwm-leds";
+		pwm_buzzer_led: pwm_buzzer_led {
+			pwms = <&pwm0 0 250000 PWM_POLARITY_NORMAL>;
+			label = "buzzer-pwm";
+		};
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+/* SPIM0 uses the same peripheral instance as TWIM0 — keep TWIM0 off. */
+&i2c0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pinctrl {
+	spi0_max86140_vb: spi0_max86140_vb {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+		group2 {
+			psels = <NRF_PSEL(SPIM_MISO, 0, 13)>;
+		};
+	};
+
+	spi0_max86140_vb_sleep: spi0_max86140_vb_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>;
+			low-power-enable;
+		};
+		group2 {
+			psels = <NRF_PSEL(SPIM_MISO, 0, 13)>;
+			low-power-enable;
+		};
+	};
+
+	i2c1_tmp117_vb: i2c1_tmp117_vb {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_tmp117_vb_sleep: i2c1_tmp117_vb_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			low-power-enable;
+		};
+	};
+
+	pwm0_buzzer_vb: pwm0_buzzer_vb {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+
+	pwm0_buzzer_vb_sleep: pwm0_buzzer_vb_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			low-power-enable;
+		};
+	};
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_buzzer_vb>;
+	pinctrl-1 = <&pwm0_buzzer_vb_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&spi0 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi0_max86140_vb>;
+	pinctrl-1 = <&spi0_max86140_vb_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+
+	max86140: maxim_max86140@0 {
+		compatible = "maxim,max86140";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+	};
+};
+
+&i2c1 {
+	status = "okay";
+	compatible = "nordic,nrf-twim";
+	pinctrl-0 = <&i2c1_tmp117_vb>;
+	pinctrl-1 = <&i2c1_tmp117_vb_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+
+	tmp117: tmp117@49 {
+		compatible = "ti,tmp117";
+		reg = <0x49>;
+	};
+};

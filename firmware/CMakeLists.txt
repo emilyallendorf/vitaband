@@ -38,6 +38,24 @@ elseif(CONFIG_VITABAND_TMP117_I2C_DEMO)
     src/main_tmp117_i2c.c
     drivers/src/tmp117.c
   )
+elseif(CONFIG_VITABAND_BLE_BODY_TEMP_TEST)
+  message(STATUS "VitaBand: main = src/main_ble_body_temp.c (BLE + TMP117 body temp)")
+  target_sources(app PRIVATE
+    src/main_ble_body_temp.c
+    drivers/src/tmp117.c
+  )
+elseif(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+  message(STATUS "VitaBand: main = src/main_ble_hr_body.c (BLE + MAX86140 HR + TMP117)")
+  target_sources(app PRIVATE
+    src/main_ble_hr_body.c
+    drivers/src/max86140.c
+    drivers/src/tmp117.c
+  )
+elseif(CONFIG_VITABAND_BLE_TEST)
+  message(STATUS "VitaBand: main = src/main_ble_test.c (standalone BLE test)")
+  target_sources(app PRIVATE
+    src/main_ble_test.c
+  )
 else()
   message(STATUS "VitaBand: main = src/main.c (full application)")
   target_sources(app PRIVATE

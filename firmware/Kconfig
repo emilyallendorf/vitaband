@@ -76,7 +76,7 @@ config VITABAND_MAX86140_HR_PP_TRACE
 
 choice VITABAND_MAX86140_HR_PPG_MODE
 	prompt "PPG rate (IR channel timing for HR math)"
-	depends on VITABAND_MAX86140_HR_DEMO
+	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST
 	default VITABAND_MAX86140_HR_PPG_100_IRRED
 	help
 	  Datasheet: N=2 (IR+Red) is only defined up to ~100 sps. For ~200 or ~400 sps
@@ -113,6 +113,21 @@ config VITABAND_TMP117_I2C_DEMO
 	  TI TMP117 via drivers/src/tmp117.c. Default overlay: VitaBand SCL=P0.26 SDA=P0.27.
 	  prj_tmp117_i2c.conf + app_tmp117_i2c.overlay; append app_tmp117_i2c_dkswap.overlay for DK.
 
+config VITABAND_BLE_TEST
+	bool "BLE test: standalone advertiser + telemetry notify"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	default n
+	help
+	  Links src/main_ble_test.c only. Runs Bluetooth peripheral advertising and
+	  exercises the custom VitaBand health telemetry GATT notify path with
+	  synthetic values, isolated from sensor/haptics drivers.
+	  Use with prj_ble_test.conf.
+
 config VITABAND_NO_BLE
 	bool "Application main without Bluetooth (state machine + sensors)"
 	depends on !VITABAND_BLINKY_BRINGUP
@@ -120,12 +135,48 @@ config VITABAND_NO_BLE
 	depends on !VITABAND_SPARKFUN_TMP102_DK
 	depends on !VITABAND_TMP117_I2C_DEMO
 	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_BLE_TEST
 	default n
 	help
 	  Same 1 Hz sensor loop and state machine as production main, but no BT
 	  stack, advertising, or GATT. Use with CONFIG_BT=n, for example:
 
 	    west build ... -- -DEXTRA_CONF_FILE=prj_no_ble.conf
+
+config VITABAND_BLE_BODY_TEMP_TEST
+	bool "BLE + TMP117 body temp (const HR + ambient in notify)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	depends on !VITABAND_BLE_TEST
+	depends on !VITABAND_NO_BLE
+	default n
+	help
+	  Links src/main_ble_body_temp.c + drivers/src/tmp117.c + BLE GATT (src/ble.c).
+	  Reads body temperature from the devicetree tmp117 node; advertises and notifies
+	  the VitaBand health telemetry characteristic with live body °C and fixed HR/ambient.
+	  Use prj_ble_body_temp.conf and app_ble_body_temp.overlay (plus DK swap overlay if needed).
+
+config VITABAND_BLE_HR_BODY_TEST
+	bool "BLE + MAX86140 HR + TMP117 body temp (telemetry notify)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	depends on !VITABAND_BLE_TEST
+	depends on !VITABAND_BLE_BODY_TEMP_TEST
+	depends on !VITABAND_NO_BLE
+	default n
+	help
+	  Links main_ble_hr_body.c + drivers/src/max86140.c + drivers/src/tmp117.c + BLE GATT.
+	  Pick overlay for your board: app_ble_hr_body_dk.overlay (SPI3 + I2C0 TMP117) or
+	  app_ble_hr_body_vitaband.overlay (SPI0 MAX86140 + TWIM1 TMP117 on P0.26/P0.27 —
+	  TWIM0 cannot run with SPI0 on nRF52840). prj_ble_hr_body.conf selects 100 sps IR+Red PPG.
 
 endmenu
 

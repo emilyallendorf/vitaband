@@ -54,23 +54,23 @@ static int tmp117_read_reg16(uint8_t reg, uint16_t *value) {
 /* ============================ INITIALIZATION ============================== */
 int tmp117_init(void) {
     if (!device_is_ready(i2c_dev.bus)) {
-        LOG_ERR("i2c bus not ready");
+        printk("i2c bus not ready");
         return -ENODEV;
     }
 
     uint16_t device_id;
     int ret = tmp117_read_reg16(REG_DEVICE_ID, &device_id);
     if (ret != 0) {
-        LOG_ERR("Failed to read TMP117 Device ID: %d", ret);
+        printk("Failed to read TMP117 Device ID: %d", ret);
         return ret;
     }
 
-    if (device_id != TMP117_DEVICE_ID_VALUE) LOG_WRN("Unexpected TMP117 ID: 0x%04x (Expected 0x0117)", device_id);
+    if (device_id != TMP117_DEVICE_ID_VALUE) printk("Unexpected TMP117 ID: 0x%04x (Expected 0x0117)", device_id);
     
     // Continuous conversion mode
     ret = tmp117_write_reg16(REG_CONFIGURATION, 0x0220); 
     if (ret != 0) {
-        LOG_ERR("Failed to configure TMP117: %d", ret);
+        printk("Failed to configure TMP117: %d", ret);
         return ret;
     }
 
