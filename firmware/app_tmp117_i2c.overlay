@@ -82,4 +82,11 @@
 		compatible = "ti,tmp117";
 		reg = <0x49>;
 	};
+
+	/* SHT3x Sensor */
+	sht3xdis: sht3xdis@45 {
+		compatible = "sensirion,sht3xd";
+		reg = <0x45>;
+		status = "okay";
+	};
 };

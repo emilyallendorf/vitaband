@@ -94,6 +94,28 @@ config VITABAND_MAX86140_HR_PPG_400_IR
 
 endchoice
 
+config VITABAND_MAX86140_HR_WRIST_PROFILE
+	bool "MAX86140 HR: wrist-oriented tuning (stronger LED, stricter peaks)"
+	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST
+	default n
+	help
+	  This board uses MAX86140 over SPI, not the Maxim MAX32664C hub + MAX86141 stack
+	  from wrist reference designs. When enabled, the driver starts at higher IR (and red)
+	  pulse amplitude for weaker wrist coupling, increases minimum peak spacing (~452 ms),
+	  tightens AC margin / crest gating, and pairs with multi-peak / prominence rejects
+	  in the driver to reduce motion-induced duplicate peaks.
+	  For best temporal resolution on the arm, prefer ~200 or ~400 sps IR-only PPG mode.
+
+config VITABAND_MAX86140_HR_WRIST_BPM_OFFSET
+	int "Subtract from displayed BPM when wrist profile (arm wear)"
+	depends on VITABAND_MAX86140_HR_WRIST_PROFILE
+	range -30 0
+	default 0
+	help
+	  Field testing often shows wrist/arm several BPM above finger or manual count.
+	  Leave 0 when validating on the finger. For wrist/arm-only demos, try -6 to -12.
+	  Applied only to max86140_read_heartrate() output and PP trace BPM line.
+
 config VITABAND_SPARKFUN_TMP102_DK
 	bool "SparkFun TMP102 on nRF52840 DK Arduino I2C (printk RTT)"
 	depends on !VITABAND_BLINKY_BRINGUP

@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-description: Maxim MAX86140 optical PPG sensor (SPI)
+#
+# Out-of-tree binding so SPI_CONFIG_DT / SPI_DT_SPEC_GET see spi-device properties
+# (spi-max-frequency, frame-format, duplex, spi-cpol, …). Upstream Zephyr has no
+# maxim,max86140.yaml — without this, devicetree does not emit DT_PROP(..., frame_format).
+
+description: Maxim MAX86140/MAX86141 optical PPG sensor on SPI
 
 compatible: "maxim,max86140"
 

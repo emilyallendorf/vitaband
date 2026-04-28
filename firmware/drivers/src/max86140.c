@@ -163,8 +163,40 @@ LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
 /*
  * Min time between HR-producing peaks. Arm motion adds extra bumps — slightly wider
  * than 250 ms rejects duplicate peaks within one beat (~214 BPM ceiling).
+ * Wrist profile stretches this a bit for noisier optical coupling.
  */
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_WRIST_PROFILE)
+#define HR_MIN_PEAK_INTERVAL_MS  452U
+#else
 #define HR_MIN_PEAK_INTERVAL_MS  280U
+#endif
+
+/* IR ADC ~19b max; batch pinned to rail ⇒ intervals meaningless — flush median buffer */
+#define IR_ADC_NEAR_FULL           520000
+
+/*
+ * Prominence when ≥4 peaks; tuned so duplicate humps don’t read high vs reference.
+ * Post-exercise / motion can yield ≥5 local maxima per batch; **do not** blanket-skip
+ * on peak count alone — that froze HR low (logs: peaks=6 skip=1 iv_raw=0 while ref ~96).
+ * Ambiguity is handled by prominence vs second-best peak.
+ */
+#define HR_PEAK_PROM_PEAKS_GE    4U
+#define HR_PEAK_PROM_MIN_ABS    52
+#define HR_PEAK_PROM_PP_NUM     10
+
+/* Median of last N accepted beat intervals (ms) — damps ~500ms ghost beats vs ~640ms real. */
+#define HR_IV_MEDIAN_CAP         5U
+#define HR_IV_MEDIAN_MIN_N       3U
+/* Raw gaps > ~1100ms are usually “missed beat” stacks after skips — poison median (logs: iv_smooth=1120). */
+#define HR_IV_HIST_PUSH_MAX_MS   1100U
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_WRIST_PROFILE)
+#define HR_PEAK_MARGIN_DIV  4   /* tighter than /5 — fewer motion ripples as peaks */
+#define HR_CREST_PP_NUM     50  /* upper half of swing must qualify as systolic */
+#else
+#define HR_PEAK_MARGIN_DIV  5
+#define HR_CREST_PP_NUM     45
+#endif
 
 /*
  * Finger off: empty FIFO streak. main_max86140_hr polls at SAMPLE_PERIOD_MS (~220 ms);
@@ -178,6 +210,11 @@ LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
 #define LED_PA_STEP           8
 #define LED_PA_FLOOR          0x10
 #define LED_PA_INIT           0x48    /* prior “kinda working” bring-up level; autogain still trims rail-flat */
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_WRIST_PROFILE)
+#define LED_PA_START          0x58U   /* high starts (0x72) + autogain → rail-flat pp=0; tune up if needed */
+#else
+#define LED_PA_START          LED_PA_INIT
+#endif
 /*
  * Nominal IR sample rate — must match Kconfig PPG mode + init() PPG_SR & LED seq.
  */
@@ -317,8 +354,54 @@ static int32_t  hr_baseline_val = 0;
 static bool     hr_baseline_ready;
 
 /* Mirrors REG_LED{1,2}_PA — auto-dim on IR rail-flat saturation */
-static uint8_t  led_pa_ir   = LED_PA_INIT;
-static uint8_t  led_pa_red  = LED_PA_INIT;
+static uint8_t  led_pa_ir   = LED_PA_START;
+static uint8_t  led_pa_red  = LED_PA_START;
+
+static uint32_t hr_iv_hist[HR_IV_MEDIAN_CAP];
+static uint8_t  hr_iv_hist_n;
+
+static void hr_iv_hist_clear(void)
+{
+    hr_iv_hist_n = 0U;
+}
+
+static void hr_iv_hist_push(uint32_t iv_ms)
+{
+    if (hr_iv_hist_n < HR_IV_MEDIAN_CAP) {
+        hr_iv_hist[hr_iv_hist_n++] = iv_ms;
+    } else {
+        memmove(&hr_iv_hist[0], &hr_iv_hist[1],
+                (size_t)(HR_IV_MEDIAN_CAP - 1U) * sizeof(hr_iv_hist[0]));
+        hr_iv_hist[HR_IV_MEDIAN_CAP - 1U] = iv_ms;
+    }
+}
+
+static uint32_t median_u32_intervals(const uint32_t *src, uint8_t n)
+{
+    uint32_t s[HR_IV_MEDIAN_CAP];
+    uint8_t  i, j;
+
+    if (n == 0U || n > HR_IV_MEDIAN_CAP) {
+        return 0U;
+    }
+
+    for (i = 0U; i < n; i++) {
+        s[i] = src[i];
+    }
+
+    for (i = 1U; i < n; i++) {
+        uint32_t key = s[i];
+
+        j = i;
+        while (j > 0U && s[j - 1U] > key) {
+            s[j] = s[j - 1U];
+            j--;
+        }
+        s[j] = key;
+    }
+
+    return s[n / 2U];
+}
 
 static void hr_contact_lost_reset(void)
 {
@@ -327,12 +410,14 @@ static void hr_contact_lost_reset(void)
     last_peak_tick = 0;
     hr_baseline_ready = false;
     hr_baseline_val = 0;
+    hr_iv_hist_clear();
 }
 
 /* LED PA step-down only — keep baseline + EMA; reset peak anchor so intervals stay valid after gain change */
 static void hr_reanchor_after_led_autogain(void)
 {
     last_peak_tick = 0U;
+    hr_iv_hist_clear();
 }
 
 static uint8_t  dbg_fifo_reg_count;
@@ -347,6 +432,10 @@ static uint32_t dbg_interval_ms;
 static uint32_t dbg_cand_bpm;
 static uint8_t  dbg_rejected;
 static uint8_t  dbg_baseline_ready;
+static int32_t  dbg_second_best_amp;
+static int32_t  dbg_prom_delta;
+static uint8_t  dbg_hr_skip_code; /* 0=none, 2=prominence fail (≥4 peaks) */
+static uint32_t dbg_iv_smooth_ms;
 
 /* Rate-limited diagnostic (default log level hides unless LOG_DBG enabled). */
 static void max86140_rtt_status(uint32_t t, int fifo_ret, bool have_ir_batch)
@@ -615,9 +704,9 @@ int max86140_init(void)
         return ret;
     }
 
-    /* ── 6. Set LED pulse amplitudes (see LED_PA_INIT — high PA ⇒ IR rail / ac=0 / HR stuck) ── */
-    led_pa_ir = LED_PA_INIT;
-    led_pa_red = LED_PA_INIT;
+    /* ── 6. Set LED pulse amplitudes (see LED_PA_* — high PA ⇒ IR rail / ac=0 / HR stuck) ── */
+    led_pa_ir = LED_PA_START;
+    led_pa_red = LED_PA_START;
 
     ret = max86140_write_reg(REG_LED1_PA, led_pa_ir);
     if (ret != 0) {
@@ -828,6 +917,9 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
     dbg_interval_ms = 0;
     dbg_cand_bpm = 0;
     dbg_rejected = 0;
+    dbg_hr_skip_code = 0;
+    dbg_second_best_amp = INT32_MIN;
+    dbg_iv_smooth_ms = 0U;
     dbg_baseline_ready = hr_baseline_ready ? 1U : 0U;
     if (n > 0) {
         dbg_ir_min = samples[0];
@@ -842,6 +934,11 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
         }
     }
     /* #endregion */
+
+    if (n > 0 && dbg_ir_min >= IR_ADC_NEAR_FULL &&
+        dbg_ir_max >= IR_ADC_NEAR_FULL) {
+        hr_iv_hist_clear();
+    }
 
     if (n == 0) return calculated_hr;
 
@@ -879,7 +976,7 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
         ac_pp = 1;
     }
 
-    int32_t margin = ac_pp / 5;
+    int32_t margin = ac_pp / HR_PEAK_MARGIN_DIV;
 
     if (margin < 34) {
         margin = 34;
@@ -887,11 +984,11 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
 
     int32_t threshold = batch_mean + margin;
 
-    /* Upper ~55 % of this batch’s IR swing — rejects mid-range noise bumps on the arm */
+    /* Upper part of this batch’s IR swing — rejects mid-range noise bumps on the arm */
     int32_t crest_min = dbg_ir_min;
 
     if (ac_pp >= 256) {
-        crest_min = dbg_ir_min + (ac_pp * 45) / 100;
+        crest_min = dbg_ir_min + (ac_pp * HR_CREST_PP_NUM) / 100;
     }
 
     /* #region agent log */
@@ -929,7 +1026,43 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
         }
     }
 
-    if (best_i >= 1) {
+    if (best_i >= 1 && dbg_peak_count >= 2) {
+        for (int i = 1; i < n - 1; i++) {
+            if (i == best_i) {
+                continue;
+            }
+
+            bool is_pk = (samples[i] > samples[i - 1]) &&
+                         (samples[i] > samples[i + 1]) &&
+                         (samples[i] > threshold) &&
+                         (samples[i] >= crest_min);
+
+            if (!is_pk) {
+                continue;
+            }
+
+            if (samples[i] > dbg_second_best_amp) {
+                dbg_second_best_amp = samples[i];
+            }
+        }
+    }
+
+    if (best_i >= 1 &&
+        dbg_peak_count >= HR_PEAK_PROM_PEAKS_GE &&
+        dbg_second_best_amp != INT32_MIN) {
+        int32_t prom_need =
+            (ac_pp * HR_PEAK_PROM_PP_NUM) / 100;
+
+        if (prom_need < HR_PEAK_PROM_MIN_ABS) {
+            prom_need = HR_PEAK_PROM_MIN_ABS;
+        }
+
+        if ((samples[best_i] - dbg_second_best_amp) < prom_need) {
+            dbg_hr_skip_code = 2;
+        }
+    }
+
+    if (best_i >= 1 && dbg_hr_skip_code == 0) {
         uint32_t peak_tick = batch_start_tick + (uint32_t)best_i;
 
         if (last_peak_tick == 0U) {
@@ -949,10 +1082,30 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
                     interval_ms > 0U ? (60000U / interval_ms) : 0U;
                 /* #endregion */
             } else {
-                uint32_t bpm = 60000U / interval_ms;
+                /*
+                 * Logs showed median poisoned after ADC rail recovery (524287…).
+                 * Only extend history when raw spacing is physiologically plausible.
+                 */
+                uint32_t raw_ibpm =
+                    interval_ms > 0U ? (60000U / interval_ms) : 0U;
+
+                if (raw_ibpm >= 48U && raw_ibpm <= 145U &&
+                    interval_ms <= HR_IV_HIST_PUSH_MAX_MS) {
+                    hr_iv_hist_push(interval_ms);
+                }
+
+                uint32_t iv_smooth = interval_ms;
+
+                if (hr_iv_hist_n >= HR_IV_MEDIAN_MIN_N) {
+                    iv_smooth =
+                        median_u32_intervals(hr_iv_hist, hr_iv_hist_n);
+                }
+
+                uint32_t bpm = iv_smooth > 0U ? (60000U / iv_smooth) : 0U;
 
                 /* #region agent log */
                 dbg_interval_ms = interval_ms;
+                dbg_iv_smooth_ms = iv_smooth;
                 dbg_cand_bpm = bpm;
                 /* #endregion */
 
@@ -967,8 +1120,8 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
 
                     calculated_hr = hr_output_ema;
                     last_peak_tick = peak_tick;
-                    LOG_DBG("HR: %u BPM (interval %u ms)", calculated_hr,
-                        interval_ms);
+                    LOG_DBG("HR: %u BPM (interval raw %u ms smooth %u ms)",
+                        calculated_hr, interval_ms, iv_smooth);
                 } else {
                     /* #region agent log */
                     dbg_rejected = 1;
@@ -979,7 +1132,33 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
                 }
             }
         }
+    } else if (best_i >= 1 && dbg_hr_skip_code != 0) {
+        dbg_rejected = 1;
     }
+
+    dbg_prom_delta = -1;
+    if (best_i >= 1 && dbg_second_best_amp != INT32_MIN) {
+        dbg_prom_delta = samples[best_i] - dbg_second_best_amp;
+    }
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PP_TRACE)
+    /* #region agent log NDJSON — capture RTT → paste .cursor/debug-75362d.log for analysis */
+    {
+        static uint32_t hr_ndj_last;
+        uint32_t tu = k_uptime_get_32();
+
+        if (n >= 3U && tu - hr_ndj_last >= 1000U) {
+            hr_ndj_last = tu;
+            printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_peak\",\"location\":\"max86140_calculate_hr\","
+                   "\"message\":\"hr_batch\",\"data\":{\"peaks\":%u,\"skip\":%u,\"prom_delta\":%d,"
+                   "\"pp\":%d,\"iv_raw\":%u,\"iv_smooth\":%u,\"cand\":%u,\"hr\":%u},\"timestamp\":%u}\n",
+                   (unsigned int)dbg_peak_count, (unsigned int)dbg_hr_skip_code, (int)dbg_prom_delta,
+                   (int)(dbg_ir_max - dbg_ir_min), dbg_interval_ms, dbg_iv_smooth_ms, dbg_cand_bpm,
+                   (unsigned int)calculated_hr, (unsigned int)tu);
+        }
+    }
+    /* #endregion */
+#endif
 
 #if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
     /* #region agent log */
@@ -1056,8 +1235,19 @@ static void max86140_ir_autogain_rail_flat(const int32_t *ir, uint8_t n)
 
     static uint32_t last_dim_ms;
     uint32_t now = k_uptime_get_32();
+    /*
+     * Hard-clipped FIFO (logs: min=max=524287, pp=0) needs faster settle than 2 s.
+     */
+    bool hard_clip = (mn >= IR_ADC_NEAR_FULL) || (mx >= IR_ADC_NEAR_FULL);
+    uint32_t dim_cooldown_ms = 2000U;
 
-    if (now - last_dim_ms < 2000U) {
+    if (pp < 200 && mx >= 510000) {
+        dim_cooldown_ms = 600U;
+    } else if (hard_clip && pp < 800) {
+        dim_cooldown_ms = 1200U;
+    }
+
+    if ((now - last_dim_ms) < dim_cooldown_ms) {
         return;
     }
 
@@ -1107,9 +1297,120 @@ static void max86140_ir_autogain_rail_flat(const int32_t *ir, uint8_t n)
     hr_reanchor_after_led_autogain();
 }
 
+/*
+ * After aggressive dimming, PA can sit at/near floor while the waveform stays
+ * rail-flat high (logs: pp≈0, codes ~517k) — no peaks ⇒ HR=0. Step back up toward
+ * LED_PA_START only when clearly near floor.
+ */
+#define WEAK_PP_RECOVER_STREAK 25U
+#define WEAK_PP_RAIL_CODE_LO    500000
+
+static uint16_t weak_pp_recover_streak;
+
+static void max86140_ir_recover_near_floor(const int32_t *ir, uint8_t n)
+{
+    if (n < 8U) {
+        return;
+    }
+
+    if (led_pa_ir > (uint8_t)(LED_PA_FLOOR + 24U) ||
+        led_pa_ir >= LED_PA_START) {
+        weak_pp_recover_streak = 0U;
+        return;
+    }
+
+    int32_t mn = ir[0];
+    int32_t mx = ir[0];
+
+    for (int i = 1; i < n; i++) {
+        if (ir[i] < mn) {
+            mn = ir[i];
+        }
+        if (ir[i] > mx) {
+            mx = ir[i];
+        }
+    }
+
+    int32_t pp = mx - mn;
+
+    if (pp >= 800) {
+        weak_pp_recover_streak = 0U;
+        return;
+    }
+
+    if (mn < WEAK_PP_RAIL_CODE_LO || mx < WEAK_PP_RAIL_CODE_LO) {
+        weak_pp_recover_streak = 0U;
+        return;
+    }
+
+    weak_pp_recover_streak++;
+
+    if (weak_pp_recover_streak < WEAK_PP_RECOVER_STREAK) {
+        return;
+    }
+
+    weak_pp_recover_streak = 0U;
+
+    uint8_t nu = (uint8_t)(led_pa_ir + LED_PA_STEP);
+
+    if (nu > LED_PA_START) {
+        nu = LED_PA_START;
+    }
+
+    int wr1 = max86140_write_reg(REG_LED1_PA, nu);
+    int wr2 = 0;
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
+    wr2 = max86140_write_reg(REG_LED2_PA, nu);
+#endif
+
+    if (wr1 != 0 || wr2 != 0) {
+        return;
+    }
+
+    led_pa_ir = nu;
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
+    led_pa_red = nu;
+#endif
+
+    printk("max86140: near-floor rail-flat → LED PA=0x%02x (mn=%d mx=%d pp=%d)\n",
+           led_pa_ir, (int)mn, (int)mx, (int)pp);
+
+    hr_reanchor_after_led_autogain();
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
  * PUBLIC API
  * ══════════════════════════════════════════════════════════════════════════ */
+
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_WRIST_PROFILE)
+#ifndef CONFIG_VITABAND_MAX86140_HR_WRIST_BPM_OFFSET
+#define CONFIG_VITABAND_MAX86140_HR_WRIST_BPM_OFFSET 0
+#endif
+#endif
+
+static uint8_t hr_wrist_display_bpm(uint8_t hr)
+{
+#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_WRIST_PROFILE)
+    if (hr == 0U) {
+        return 0U;
+    }
+
+    int32_t adj =
+        (int32_t)hr + (int32_t)CONFIG_VITABAND_MAX86140_HR_WRIST_BPM_OFFSET;
+
+    if (adj < (int32_t)MIN_HEART_RATE) {
+        adj = (int32_t)MIN_HEART_RATE;
+    }
+    if (adj > (int32_t)MAX_HEART_RATE) {
+        adj = (int32_t)MAX_HEART_RATE;
+    }
+
+    return (uint8_t)adj;
+#else
+    return hr;
+#endif
+}
 
 uint8_t max86140_read_heartrate(void)
 {
@@ -1125,7 +1426,7 @@ uint8_t max86140_read_heartrate(void)
             empty_fifo_streak = 0U;
         }
         max86140_rtt_status(t, ret, false);
-        return calculated_hr;
+        return hr_wrist_display_bpm(calculated_hr);
     }
 
     empty_fifo_streak = 0U;
@@ -1145,20 +1446,26 @@ uint8_t max86140_read_heartrate(void)
 
         if (nowp - pp_trace_last >= 1000U) {
             pp_trace_last = nowp;
-            printk("max86140 pp: n=%u min=%d max=%d pp=%d mean=%d thr=%d peaks=%u bpm=%u\n",
+            printk("max86140 pp: n=%u min=%d max=%d pp=%d mean=%d thr=%d peaks=%u "
+                   "skip=%u prom_d=%d iv_raw=%u iv_smooth=%u bpm=%u\n",
                    (unsigned int)n, dbg_ir_min, dbg_ir_max,
                    dbg_ir_max - dbg_ir_min,
                    dbg_mean, dbg_thresh,
-                   (unsigned int)dbg_peak_count, (unsigned int)calculated_hr);
+                   (unsigned int)dbg_peak_count,
+                   (unsigned int)dbg_hr_skip_code,
+                   (int)dbg_prom_delta,
+                   dbg_interval_ms, dbg_iv_smooth_ms,
+                   (unsigned int)hr_wrist_display_bpm(calculated_hr));
         }
     }
     /* #endregion */
 #endif
 
     max86140_ir_autogain_rail_flat(ir_samples, n);
+    max86140_ir_recover_near_floor(ir_samples, n);
 
     t = k_uptime_get_32();
     max86140_rtt_status(t, 0, true);
 
-    return calculated_hr;
+    return hr_wrist_display_bpm(calculated_hr);
 }

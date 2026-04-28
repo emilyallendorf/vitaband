@@ -159,10 +159,19 @@ int main(void)
 				ret = pwm_set(PWM_DEV, PWM_CH, BUZZ_PERIOD_NS, BUZZ_PULSE_NS,
 					      PWM_POLARITY_NORMAL);
 				printk("Buzzer ON (~4 kHz), err=%d\n", ret);
+
+				
 			} else {
 				ret = pwm_set(PWM_DEV, PWM_CH, BUZZ_PERIOD_NS, 0U,
 					      PWM_POLARITY_NORMAL);
 				printk("Buzzer OFF, err=%d\n", ret);
+
+				ret = gpio_pin_configure(HAPTIC_PORT, MOTOR_PIN, GPIO_OUTPUT_LOW);
+				if (ret != 0) {
+					printk("ERROR: motor GPIO %d\n", ret);
+					return 0;
+				}
+				printk("OK: P0.04 MOTOR_EN low\n");
 			}
 		} else if (btn == BTN_LONG_PRESS) {
 			printk("Long press (ignored in bring-up)\n");

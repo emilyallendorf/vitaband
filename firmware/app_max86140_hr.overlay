@@ -12,6 +12,8 @@
  * Build: prj_max86140_hr.conf + -DDTC_OVERLAY_FILE=app_max86140_hr.overlay
  */
 
+#include <zephyr/dt-bindings/spi/spi.h>
+
 / {
 	chosen {
 		/delete-property/ zephyr,console;
@@ -65,5 +67,6 @@
 		compatible = "maxim,max86140";
 		reg = <0>;
 		spi-max-frequency = <8000000>;
+		frame-format = <SPI_FRAME_FORMAT_MOTOROLA>;
 	};
 };

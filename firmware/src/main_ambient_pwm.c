@@ -1,63 +1,71 @@
 /*
- * Ambient SHT3x-DIS: periodic temperature + humidity (Segger RTT printk) via Zephyr SHT3XD driver.
+ * Ambient SHT3x-DIS via drivers/src/sht3x-dis.c + TMP117 via drivers/src/tmp117.c.
+ * I2C layout from app_ambient_pwm.overlay (label sht3xdis + tmp117 on i2c0).
  *
  * Build: prj_ambient_pwm.conf + app_ambient_pwm.overlay
+ *
+ * Zephyr CONFIG_SHT3XD is off so the stock sensirion,sht3xd driver does not bind;
+ * your custom driver talks to the same node using I2C_DT_SPEC_GET(DT_NODELABEL(sht3xdis)).
  */
 
-#include <zephyr/device.h>
-#include <zephyr/devicetree.h>
-#include <zephyr/drivers/i2c.h>
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
-/* Same command as Zephyr sht3xd.c init: SHT3XD_CMD_CLEAR_STATUS = 0x3041 */
-static const uint8_t sht3xd_clear_status[] = { 0x30, 0x41 };
+#include <sht3x-dis.h>
+#include <tmp117.h>
 
 int main(void)
 {
-	const struct device *sht = DEVICE_DT_GET(DT_NODELABEL(sht3xdis));
-	const struct device *bus = DEVICE_DT_GET(DT_PARENT(DT_NODELABEL(sht3xdis)));
-
 	k_sleep(K_MSEC(2000)); /* wait for RTT viewer to attach */
 
-	printk("\n=== VitaBand ambient SHT3x-DIS demo ===\n");
+	printk("\n=== VitaBand ambient SHT3x (custom) + TMP117 ===\n");
 
-	/* #region agent log */
-	printk("ambient/dbg: hyp=A bus=%s parent_ready=%d\n", bus->name,
-	       device_is_ready(bus));
-	{
-		int p8a = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
-				    0x8a);
-		int p22 = i2c_write(bus, sht3xd_clear_status, sizeof(sht3xd_clear_status),
-				    0x22);
+	int ret;
 
-		printk("ambient/dbg: hyp=B I2C clear-status write: 0x8a->%d 0x22->%d "
-		       "(0=ACK; -EIO typical NACK)\n",
-		       p8a, p22);
+
+	ret = sht3xdis_init();
+
+	if (ret != 0) {
+		printk("SHT3x-DIS init failed 3(%d)\n", ret);
+		return ret;
 	}
-	/* #endregion */
+	printk("SHT3x-DIS initialized successfully\n");
 
-	if (!device_is_ready(sht)) {
-		printk("SHT3x not ready — power, solder, or I2C pinmux vs PCB (shared bus with TMP117)\n");
-		printk("hint: app_ambient_pwm.overlay must match VitaBand SCL/SDA pads; optional "
-		       "app_ambient_pwm_i2c_dkswap.overlay for legacy pin order.\n");
-		printk("hint: if only 0x44 ACKs, set reg = <0x44> (ADDR pin to GND).\n");
-		return -1;
-	}
+	// ret = tmp117_init();
+	// /* #region agent log */
+	// printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H4\",\"location\":\"main_ambient_pwm.c\","
+	//        "\"message\":\"tmp117_init\",\"data\":{\"ret\":%d},\"timestamp\":%u}\n",
+	//        ret, (unsigned)k_uptime_get_32());
+	// /* #endregion */
+	// if (ret != 0) {
+	// 	printk("TMP117 init failed (%d)\n", ret);
+	// 	return ret;
+	// }
+	// printk("TMP117 initialized successfully\n");
 
-	printk("SHT3x ready, sampling every 500ms\n");
+	
+
+	printk("Sensors ready, sampling every 500 ms\n");
 
 	for (;;) {
-		struct sensor_value temp, humidity;
+		// float amb_t;
+		// float amb_rh;
 
-		sensor_sample_fetch(sht);
-		sensor_channel_get(sht, SENSOR_CHAN_AMBIENT_TEMP, &temp);
-		sensor_channel_get(sht, SENSOR_CHAN_HUMIDITY, &humidity);
+		// ret = sht3xdis_read_all(&amb_t, &amb_rh);
+		// if (ret != 0) {
+		// 	printk("SHT3x read failed (%d)\n", ret);
+		// } else {
+		// 	printk("Ambient (SHT): %.3f °C  RH: %.2f %%  |  ",
+		// 	       (double)amb_t, (double)amb_rh);
+		// }
 
-		printk("Temp: %d.%06d C  Humidity: %d.%06d %%RH\n",
-		       temp.val1, temp.val2,
-		       humidity.val1, humidity.val2);
+		// float body = tmp117_read_temperature();
+
+		// if (body > -90.0f) {
+		// 	printk("Body (TMP117): %.3f °C\n", (double)body);
+		// } else {
+		// 	printk("Body (TMP117): read error\n");
+		// }
 
 		k_sleep(K_MSEC(500));
 	}

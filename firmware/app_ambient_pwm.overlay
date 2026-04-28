@@ -3,11 +3,12 @@
  * For nRF52840 DK jumpers labeled from older docs (SCL=P0.26, SDA=P0.27), append AFTER this file:
  *   app_ambient_pwm_i2c_dkswap.overlay
  * SHT3x-DIS @ 0x45 (ADDR → VDD; use 0x44 if ADDR → GND).
+ * compatible stays sensirion,sht3xd for documentation; prj_ambient_pwm.conf sets
+ * CONFIG_SHT3XD=n so only drivers/src/sht3x-dis.c talks to this node.
  * printk: Segger RTT (prj_ambient_pwm.conf) — uart0 disabled like bring-up.
  *
  * west build ... -DCONF_FILE=prj_ambient_pwm.conf -DDTC_OVERLAY_FILE=app_ambient_pwm.overlay
  */
-
 #include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
 
 / {
@@ -36,7 +37,6 @@
 	status = "disabled";
 };
 
-/* nRF52: SPI0 default pinctrl can overlap Arduino I2C pins — keep off for I2C0 bring-up */
 &spi0 {
 	status = "disabled";
 };
@@ -50,18 +50,18 @@
 };
 
 &pinctrl {
-	i2c0_ambient: i2c0_ambient {
+	i2c0_vb_default: i2c0_vb_default {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
-				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			psels = <NRF_PSEL(TWIM_SCL, 0, 27)>,
+				<NRF_PSEL(TWIM_SDA, 0, 26)>;
 			bias-pull-up;
 		};
 	};
 
-	i2c0_ambient_sleep: i2c0_ambient_sleep {
+	i2c0_vb_sleep: i2c0_vb_sleep {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
-				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			psels = <NRF_PSEL(TWIM_SCL, 0, 27)>,
+				<NRF_PSEL(TWIM_SDA, 0, 26)>;
 			low-power-enable;
 		};
 	};
@@ -69,15 +69,23 @@
 
 &i2c0 {
 	status = "okay";
-	/delete-property/ compatible;
 	compatible = "nordic,nrf-twim";
-	pinctrl-0 = <&i2c0_ambient>;
-	pinctrl-1 = <&i2c0_ambient_sleep>;
+	pinctrl-0 = <&i2c0_vb_default>;
+	pinctrl-1 = <&i2c0_vb_sleep>;
 	pinctrl-names = "default", "sleep";
 	clock-frequency = <100000>;
 
-	sht3xdis: sht3xdis@22 {
+	/* SHT3x Sensor */
+	sht3xdis: sht3xdis@45 {
 		compatible = "sensirion,sht3xd";
-		reg = <0x22>;
+		reg = <0x45>;
+		status = "okay";
+	};
+
+	/* TMP117 Sensor */
+	tmp117: tmp117@49 {
+		compatible = "ti,tmp117";
+		reg = <0x49>;
+		status = "okay";
 	};
 };

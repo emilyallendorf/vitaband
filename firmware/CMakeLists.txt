@@ -5,6 +5,9 @@ cmake_minimum_required(VERSION 3.20.0)
 # Lets editors (C/C++, clangd) resolve Zephyr headers after `west build`.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Application devicetree bindings (e.g. maxim,max86140 → spi-device.yaml)
+list(APPEND DTS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/dts)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(vitaband_firmware)
 
@@ -23,9 +26,11 @@ elseif(CONFIG_VITABAND_MAX86140_HR_DEMO)
     drivers/src/max86140.c
   )
 elseif(CONFIG_VITABAND_AMBIENT_PWM_DEMO)
-  message(STATUS "VitaBand: main = src/main_ambient_pwm.c (ambient SHT3XD sensor API demo)")
+  message(STATUS "VitaBand: main = src/main_ambient_pwm.c (custom SHT3x + drivers/src/sht3x-dis.c)")
   target_sources(app PRIVATE
     src/main_ambient_pwm.c
+    drivers/src/sht3x-dis.c
+    drivers/src/tmp117.c
   )
 elseif(CONFIG_VITABAND_SPARKFUN_TMP102_DK)
   message(STATUS "VitaBand: main = src/main_sparkfun_tmp102_dk.c (SparkFun TMP102 DK I2C)")

@@ -9,6 +9,7 @@
 
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include <zephyr/dt-bindings/spi/spi.h>
 
 / {
 	chosen {
@@ -153,6 +154,7 @@
 		compatible = "maxim,max86140";
 		reg = <0>;
 		spi-max-frequency = <1000000>;
+		frame-format = <SPI_FRAME_FORMAT_MOTOROLA>;
 	};
 };
 
