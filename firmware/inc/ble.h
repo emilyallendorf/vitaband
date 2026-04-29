@@ -20,6 +20,9 @@
 #define VITABAND_HEALTH_CHR_TELEMETRY_UUID_VAL                                             \
 	BT_UUID_128_ENCODE(0x8b4cb002, 0x7a2e, 0x4c91, 0xb3d6, 0x1c0de5a1b2c3)
 
+#define VITABAND_CALIBRATION_CHRC_UUID_VAL \
+    BT_UUID_128_ENCODE(0x8b4cb003, 0x7a2e, 0x4c91, 0xb3d6, 0x1c0de5a1b2c3)
+
 /*
  * Canonical UUID strings (CoreBluetooth / nRF Connect):
  *   Service:    8b4cb001-7a2e-4c91-b3d6-1c0de5a1b2c3
