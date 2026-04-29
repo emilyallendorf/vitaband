@@ -279,8 +279,8 @@ static const char *vitaband_state_name(vitaband_state_t s)
 	}
 }
 
-static float   base_skin_temp  = 34.0f;
-static uint8_t base_heart_rate = 72;
+//static float   base_skin_temp  = 34.0f;
+//static uint8_t base_heart_rate = 72;
 
 int main(void)
 {
@@ -312,11 +312,10 @@ int main(void)
 	k_msleep(500);
 	float first_skin = read_temperature(BODY);
 	if (first_skin > -50.0f) {
-		base_skin_temp = first_skin;
-		LOG_INF("Baseline skin temp: %.2f C", (double)base_skin_temp);
+		state_manager_set_baseline(first_skin, 72);
+		LOG_INF("Initial fallback baseline skin temp: %.2f C", (double)first_skin);
 	} else {
-		LOG_WRN("TMP117 not ready — using %.1f C fallback",
-			(double)base_skin_temp);
+		LOG_WRN("TMP117 not ready — using fallback baseline 34.0 C");
 	}
 
 	calibrate_temperature_sensor(BODY);
@@ -326,7 +325,7 @@ int main(void)
 			     is_temp_sensor_ready(AMBIENT);
 	if (!sensors_ready) {
 		LOG_WRN("Sensors not ready or need calibration (baseline skin %.1f C)",
-			(double)base_skin_temp);
+			34.0);
 	}
 
 	vitaband_state_t curr_state = OK;
@@ -419,8 +418,7 @@ int main(void)
 		float   humidity     = read_humidity();
 		uint8_t heart_rate   = read_heart_rate();
 
-		uint8_t psi_int =
-			calculate_risk_score(skin_temp, base_skin_temp, heart_rate, base_heart_rate);
+		uint8_t psi_int = state_manager_calculate_risk_score(skin_temp, heart_rate);
 
 		button_status_t btn = poll_button();
 
