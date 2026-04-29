@@ -3,14 +3,20 @@
  *   MAX86140 on SPIM0 + TMP117 + SHT3x-DIS on **TWIM1** (P0.26 SCL, P0.27 SDA).
  * TWIM0 shares the SPIM0 peripheral — keep i2c0 disabled when SPI0 is used.
  *
+ * **nRF52840 DK:** do **not** use this file — SPI/I2C pinmux is for the VitaBand board. Use
+ * **app_main_full_dk.overlay** with prj_full_vitaband.conf (SPI3 + I2C0 on Arduino headers).
+ *
  * SHT3x I²C address **0x45** (ADDR pin → VDD). Use **0x44** if ADDR is tied to GND
  * (change reg = <0x44> on the sht3xdis node).
  *
  * MOTOR_EN on **P0.04** (haptics.c DT_ALIAS(motor_en)). nRF52840 DK on-board LEDs use
  * P0.13–P0.16 — no GPIO clash with P0.04.
  *
- * Console: virtual UART on Segger RTT (`rtt0`) — see prj_vitaband_sensors.conf (UART_CONSOLE + SERIAL).
- * Physical uart0 disabled. Open **RTT Viewer** on the J-Link USB device (not the DK COM port).
+ * Console: Segger RTT only (`rtt0`), match prj_full_vitaband.conf / prj_vitaband_sensors.conf
+ * (CONFIG_RTT_CONSOLE=y, CONFIG_UART_CONSOLE=n, CONFIG_SERIAL=n). Logs use the **same J-Link USB**
+ * as flash/debug; unplugging that USB stops **new** bytes from reaching the PC (scrollback may look
+ * like output continues). Physical uart0 disabled — not the DK virtual COM port unless you rebuild
+ * with UART console + uart0 enabled.
  *
  * Example:
  *   west build -b nrf52840dk/nrf52840 firmware -- \
@@ -37,11 +43,17 @@
 		status = "okay";
 	};
 
+	/*
+	 * nrf52840dk merges gpio-leds on P0.13–P0.16 — same pins as SPIM0 + CS for MAX86140.
+	 * Remap every led_* to harmless pins (same pattern as app_ble_hr_body_vitaband.overlay).
+	 * led_2 must leave P0.14 (SPI CS): ble-hr-body maps led_2 → P0.04; we use P0.04 for motor-en,
+	 * so park led_2 on P0.28 (assume NC on VitaBand PCB — adjust if your layout uses it).
+	 */
 	leds {
 		status = "disabled";
 		led0: led_0 { status = "disabled"; gpios = <&gpio0 2 GPIO_ACTIVE_LOW>; };
 		led1: led_1 { status = "disabled"; gpios = <&gpio0 3 GPIO_ACTIVE_LOW>; };
-		/* Omitted led_2 here; merged board may still supply led_2 (DK: P0.15 — not P0.04). */
+		led2: led_2 { status = "disabled"; gpios = <&gpio0 28 GPIO_ACTIVE_LOW>; };
 		led3: led_3 { status = "disabled"; gpios = <&gpio0 7 GPIO_ACTIVE_LOW>; };
 	};
 

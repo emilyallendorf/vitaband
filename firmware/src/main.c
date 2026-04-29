@@ -10,6 +10,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
 
@@ -22,6 +23,7 @@
 
 #include <sensors.h>
 #include <state_manager.h>
+#include <haptics.h>
 #include <mock_sensors.h>
 #include <config.h>
 #if IS_ENABLED(CONFIG_BT)
@@ -59,9 +61,9 @@ static ATOMIC_DEFINE(ble_state, STATE_BITS);
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
-		printk("Connection failed, err 0x%02x %s\n", err, bt_hci_err_to_str(err));
+		LOG_WRN("Connection failed, err 0x%02x %s", err, bt_hci_err_to_str(err));
 	} else {
-		printk("Connected\n");
+		LOG_INF("Connected");
 
 		(void)atomic_set_bit(ble_state, STATE_CONNECTED);
 	}
@@ -69,7 +71,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
-	printk("Disconnected, reason 0x%02x %s\n", reason, bt_hci_err_to_str(reason));
+	LOG_INF("Disconnected, reason 0x%02x %s", reason, bt_hci_err_to_str(reason));
 
 	(void)atomic_set_bit(ble_state, STATE_DISCONNECTED);
 }
@@ -85,7 +87,7 @@ static void auth_cancel(struct bt_conn *conn)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	printk("Pairing cancelled: %s\n", addr);
+	LOG_WRN("Pairing cancelled: %s", addr);
 }
 
 static struct bt_conn_auth_cb auth_cb_display = {
@@ -175,6 +177,10 @@ static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(BUTTON_NODE, gpios);
 
 static volatile int64_t button_press_time_ms = 0;
 static volatile bool    button_active        = false;
+/* State machine runs at 1 Hz; fast loop (~220 ms) used to drain HR FIFO. Raw PRESSED /
+ * LONG_PRESS from poll would exist for only one fast iteration — latch until SM tick. */
+static volatile bool button_latch_short = false;
+static volatile bool button_latch_long  = false;
 static struct gpio_callback button_cb_data;
 
 static void button_isr(const struct device *dev, struct gpio_callback *cb,
@@ -199,6 +205,12 @@ static button_status_t poll_button(void)
 	if (button_active) {
 		if ((now - button_press_time_ms) >= LONG_PRESS_MS) {
 			button_active = false;
+			button_press_time_ms = 0;
+			button_latch_short = false;
+			button_latch_long  = true;
+			// #region agent log
+			LOG_DBG("btn: long press latched");
+			// #endregion
 			return LONG_PRESS;
 		}
 		return UNPRESSED;
@@ -206,10 +218,32 @@ static button_status_t poll_button(void)
 
 	if (button_press_time_ms > 0) {
 		button_press_time_ms = 0;
+		button_latch_short = true;
+		// #region agent log
+		LOG_DBG("btn: short press latched (release)");
+		// #endregion
+	}
+
+	if (button_latch_long) {
+		return LONG_PRESS;
+	}
+	if (button_latch_short) {
 		return PRESSED;
 	}
 
 	return UNPRESSED;
+}
+
+static void button_clear_sm_latches(void)
+{
+	if (button_latch_short || button_latch_long) {
+		// #region agent log
+		LOG_DBG("btn: SM cleared latch short=%d long=%d", button_latch_short ? 1 : 0,
+			button_latch_long ? 1 : 0);
+		// #endregion
+	}
+	button_latch_short = false;
+	button_latch_long  = false;
 }
 
 static int button_init(void)
@@ -249,6 +283,10 @@ static button_status_t poll_button(void)
 	return UNPRESSED;
 }
 
+static void button_clear_sm_latches(void)
+{
+}
+
 #endif /* DT_NODE_HAS_STATUS(BUTTON_NODE) */
 
 #else /* !CONFIG_GPIO */
@@ -261,6 +299,10 @@ static int button_init(void)
 static button_status_t poll_button(void)
 {
 	return UNPRESSED;
+}
+
+static void button_clear_sm_latches(void)
+{
 }
 
 #endif /* CONFIG_GPIO */
@@ -291,6 +333,17 @@ static bool             g_prev_mock_feed;
 #define HR_POLL_MS          220
 #define STATE_MACHINE_MS    1000
 
+/* Same vitals behavior as main_ble_hr_body.c: fixed ambient in BLE payload, last good skin
+ * when TMP117 read fails, EMA on HR.
+ */
+#define AMBIENT_C_FIXED 24.5f
+#define BAD_TEMP_C      (-99.0f)
+
+static uint8_t hr_smooth;
+static float   last_body_c = 25.0f;
+/** Last TMP117 read each poll (for logs); ~-99 °C means I2C/read failure — skin line still shows last_body_c. */
+static float   last_body_raw = BAD_TEMP_C;
+
 static uint8_t          g_latest_hr_bpm;
 static button_status_t  g_latest_btn;
 
@@ -308,11 +361,11 @@ int main(void)
 #if IS_ENABLED(CONFIG_BT)
 	err = bt_enable(NULL);
 	if (err) {
-		printk("Bluetooth init failed (err %d)\n", err);
+		LOG_ERR("Bluetooth init failed (err %d)", err);
 		return 0;
 	}
 
-	printk("Bluetooth initialized\n");
+	LOG_INF("Bluetooth initialized");
 
 	bt_conn_auth_cb_register(&auth_cb_display);
 
@@ -320,10 +373,37 @@ int main(void)
 	LOG_INF("Bluetooth disabled — same sensor loop and state machine as full build");
 #endif
 
+	/* Same order as main_ble_hr_body.c: recover I2C *before* tmp117_init (sensors.c). */
+	k_msleep(250);
+
+#define TMP117_I2C_NODE DT_PARENT(DT_NODELABEL(tmp117))
+#if DT_NODE_HAS_STATUS(TMP117_I2C_NODE, okay)
+	{
+		const struct device *i2c = DEVICE_DT_GET(TMP117_I2C_NODE);
+
+		LOG_INF("TMP117 bus ready: %s", device_is_ready(i2c) ? "yes" : "no");
+		(void)i2c_recover_bus(i2c);
+	}
+#endif
+#undef TMP117_I2C_NODE
+
 	temperature_sensor_init(BODY);
 	temperature_sensor_init(AMBIENT);
 	heart_rate_sensor_init();
 	button_init();
+
+	err = haptics_init();
+	if (err != 0) {
+		LOG_WRN("haptics_init failed (%d) — buzzer/motor may not work", err);
+	}
+
+	LOG_INF("Sensor HW: MAX86140=%s TMP117=%s SHT3x=%s",
+		sensors_hr_hw_initialized() ? "ok" : "FAIL",
+		sensors_body_temp_hw_initialized() ? "ok" : "FAIL",
+		sensors_ambient_temp_hw_initialized() ? "ok" : "FAIL");
+	if (sensors_hr_hw_initialized()) {
+		LOG_INF("HR may stay 0 until MAX86140 has PPG contact (finger).");
+	}
 
 	state_manager_init();
 
@@ -331,6 +411,7 @@ int main(void)
 	float first_skin = read_temperature(BODY);
 	if (first_skin > -50.0f) {
 		base_skin_temp = first_skin;
+		last_body_c    = first_skin;
 		LOG_INF("Baseline skin temp: %.2f C", (double)base_skin_temp);
 	} else {
 		LOG_WRN("TMP117 not ready — using %.1f C fallback",
@@ -340,7 +421,8 @@ int main(void)
 	calibrate_temperature_sensor(BODY);
 	calibrate_temperature_sensor(AMBIENT);
 	calibrate_heart_rate_sensor();
-	bool sensors_ready = is_hr_sensor_ready() & is_temp_sensor_ready(BODY) &
+
+	bool sensors_ready = is_hr_sensor_ready() && is_temp_sensor_ready(BODY) &&
 			     is_temp_sensor_ready(AMBIENT);
 	if (!sensors_ready) {
 		LOG_WRN("Sensors not ready or need calibration (baseline skin %.1f C)",
@@ -363,44 +445,44 @@ int main(void)
 #endif
 
 #if !defined(CONFIG_BT_EXT_ADV)
-	printk("Starting Legacy Advertising (connectable and scannable)\n");
+	LOG_INF("Starting Legacy Advertising (connectable and scannable)");
 	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err) {
-		printk("Advertising failed to start (err %d)\n", err);
+		LOG_ERR("Advertising failed to start (err %d)", err);
 		return 0;
 	}
 
 #else /* CONFIG_BT_EXT_ADV */
-	printk("Creating a Coded PHY connectable non-scannable advertising set\n");
+	LOG_INF("Creating a Coded PHY connectable non-scannable advertising set");
 	err = bt_le_ext_adv_create(&adv_param, NULL, &adv);
 	if (err) {
-		printk("Failed to create Coded PHY extended advertising set (err %d)\n", err);
+		LOG_WRN("Failed to create Coded PHY extended advertising set (err %d)", err);
 
-		printk("Creating a non-Coded PHY connectable non-scannable advertising set\n");
+		LOG_INF("Creating a non-Coded PHY connectable non-scannable advertising set");
 		adv_param.options &= ~BT_LE_ADV_OPT_CODED;
 		err = bt_le_ext_adv_create(&adv_param, NULL, &adv);
 		if (err) {
-			printk("Failed to create extended advertising set (err %d)\n", err);
+			LOG_ERR("Failed to create extended advertising set (err %d)", err);
 			return 0;
 		}
 	}
 
-	printk("Setting extended advertising data\n");
+	LOG_INF("Setting extended advertising data");
 	err = bt_le_ext_adv_set_data(adv, ad, ARRAY_SIZE(ad), NULL, 0);
 	if (err) {
-		printk("Failed to set extended advertising data (err %d)\n", err);
+		LOG_ERR("Failed to set extended advertising data (err %d)", err);
 		return 0;
 	}
 
-	printk("Starting Extended Advertising (connectable non-scannable)\n");
+	LOG_INF("Starting Extended Advertising (connectable non-scannable)");
 	err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
 	if (err) {
-		printk("Failed to start extended advertising set (err %d)\n", err);
+		LOG_ERR("Failed to start extended advertising set (err %d)", err);
 		return 0;
 	}
 #endif /* CONFIG_BT_EXT_ADV */
 
-	printk("Advertising successfully started\n");
+	LOG_INF("Advertising successfully started");
 
 #if defined(HAS_LED)
 	err = blink_setup();
@@ -421,11 +503,17 @@ int main(void)
 #endif /* CONFIG_BT */
 
 #if IS_ENABLED(CONFIG_BT)
-	printk("Vitaband Shell Test Harness Ready.\n");
+#if IS_ENABLED(CONFIG_SHELL)
+	LOG_INF("VitaBand ready (BLE + shell). Type 'help' for commands.");
 #else
-	printk("VitaBand: state machine + sensors (no BLE).\n");
+	LOG_INF("VitaBand ready (BLE + RTT logs). Shell disabled in this build.");
 #endif
-	printk("Type 'help' in the terminal to see commands.\n");
+#else
+	LOG_INF("VitaBand: state machine + sensors (no BLE).");
+#endif
+#if IS_ENABLED(CONFIG_SHELL)
+	LOG_INF("Interactive shell: type 'help' for commands.");
+#endif
 
 	int64_t next_state_tick_ms = k_uptime_get();
 
@@ -450,7 +538,28 @@ int main(void)
 			g_latest_hr_bpm = mock_read_heart_rate();
 			g_latest_btn = mock_read_button_status();
 		} else {
-			g_latest_hr_bpm = read_heart_rate();
+			uint8_t raw_hr = read_heart_rate();
+
+			if (raw_hr > 0U) {
+				if (hr_smooth == 0U) {
+					hr_smooth = raw_hr;
+				} else {
+					hr_smooth = (uint8_t)(((uint16_t)hr_smooth * 3U +
+							       (uint16_t)raw_hr + 2U) /
+							      4U);
+				}
+			} else {
+				hr_smooth = 0U;
+			}
+
+			float body_c = read_temperature(BODY);
+
+			last_body_raw = body_c;
+			if (body_c > BAD_TEMP_C + 1.0f) {
+				last_body_c = body_c;
+			}
+
+			g_latest_hr_bpm = hr_smooth;
 			g_latest_btn = poll_button();
 		}
 
@@ -461,18 +570,18 @@ int main(void)
 #endif
 		} else if (atomic_test_and_clear_bit(ble_state, STATE_DISCONNECTED)) {
 #if !defined(CONFIG_BT_EXT_ADV)
-			printk("Starting Legacy Advertising (connectable and scannable)\n");
+			LOG_INF("Starting Legacy Advertising (connectable and scannable)");
 			err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd,
 					      ARRAY_SIZE(sd));
 			if (err) {
-				printk("Advertising failed to start (err %d)\n", err);
+				LOG_ERR("Advertising failed to start (err %d)", err);
 				return 0;
 			}
 #else
-			printk("Starting Extended Advertising (connectable and non-scannable)\n");
+			LOG_INF("Starting Extended Advertising (connectable and non-scannable)");
 			err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
 			if (err) {
-				printk("Failed to start extended advertising set (err %d)\n", err);
+				LOG_ERR("Failed to start extended advertising set (err %d)", err);
 				return 0;
 			}
 #endif
@@ -490,15 +599,21 @@ int main(void)
 			 * Snapshot vitals in one tick for PSI: same-cycle body temp + HR
 			 * (not a stale g_latest_hr from an earlier 220 ms poll).
 			 */
-			float        skin_temp;
-			uint8_t      heart_rate;
+			float   skin_temp;
+			uint8_t heart_rate;
+			uint8_t hr_send;
+			uint8_t hr_for_psi;
 
 			if (mock_on) {
-				skin_temp = mock_read_temperature();
-				heart_rate = mock_read_heart_rate();
+				skin_temp   = mock_read_temperature();
+				heart_rate  = mock_read_heart_rate();
+				hr_send     = heart_rate > 0U ? heart_rate : 1U;
+				hr_for_psi  = heart_rate > 0U ? heart_rate : hr_send;
 			} else {
-				skin_temp = read_temperature(BODY);
-				heart_rate = read_heart_rate();
+				skin_temp  = last_body_c;
+				heart_rate = hr_smooth;
+				hr_send    = (hr_smooth > 0U) ? hr_smooth : 1U;
+				hr_for_psi = (hr_smooth > 0U) ? hr_smooth : hr_send;
 			}
 
 			g_latest_hr_bpm = heart_rate;
@@ -506,26 +621,12 @@ int main(void)
 			float ambient_temp = read_temperature(AMBIENT);
 			float humidity     = read_humidity();
 
-			uint8_t psi_int = calculate_risk_score(skin_temp, base_skin_temp, heart_rate,
+			uint8_t psi_int = calculate_risk_score(skin_temp, base_skin_temp, hr_for_psi,
 							       base_heart_rate);
-
-#if IS_ENABLED(CONFIG_VITABAND_PSI_TRACE)
-			/* #region agent log */
-			printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_psi\",\"location\":\"main.c:state_tick\","
-			       "\"message\":\"psi_inputs\",\"data\":{\"skin\":%.3f,\"base_skin\":%.3f,\"hr\":%u,"
-			       "\"base_hr\":%u,\"psi\":%u,\"mock\":%u},\"timestamp\":%u}\n",
-			       (double)skin_temp, (double)base_skin_temp, (unsigned int)heart_rate,
-			       (unsigned int)base_heart_rate, (unsigned int)psi_int, mock_on ? 1U : 0U,
-			       (unsigned int)k_uptime_get_32());
-			/* #endregion */
-#endif
 
 			vitaband_state_t next_state =
 				determine_state(g_curr_state, (float)psi_int, g_latest_btn);
 			if (next_state != g_curr_state) {
-				printk("\n*** STATE TRANSITION: %s -> %s | psi=%u | btn=%d ***\n",
-				       vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
-				       psi_int, (int)g_latest_btn);
 				LOG_WRN("State transition: %s -> %s | psi=%u btn=%d",
 					vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
 					psi_int, (int)g_latest_btn);
@@ -533,15 +634,21 @@ int main(void)
 				g_curr_state = next_state;
 			}
 
-			/* INF so readings appear with default module level (DBG was silent). */
-			LOG_INF("vitals: skin=%.2f C amb=%.2f C hum=%.0f%% HR=%u PSI=%u state=%s btn=%d mock=%d",
-				(double)skin_temp, (double)ambient_temp, (double)humidity,
+			button_clear_sm_latches();
+
+			/* skin = last good body temp for PSI; body_raw = latest TMP117 read (-99 => failure). */
+			LOG_INF("vitals: skin=%.2f C body_raw=%.2f C amb=%.2f C hum=%.0f%% HR=%u PSI=%u state=%s btn=%d mock=%d",
+				(double)skin_temp,
+				mock_on ? (double)skin_temp : (double)last_body_raw,
+				(double)ambient_temp, (double)humidity,
 				heart_rate, psi_int, vitaband_state_name(g_curr_state),
 				(int)g_latest_btn, mock_on ? 1 : 0);
 
 #if IS_ENABLED(CONFIG_BT)
 			if (vitaband_health_notify_enabled()) {
-				(void)vitaband_health_notify(heart_rate, skin_temp, ambient_temp,
+				float body_for_notify = mock_on ? skin_temp : last_body_c;
+
+				(void)vitaband_health_notify(hr_send, body_for_notify, AMBIENT_C_FIXED,
 							     g_curr_state, psi_int);
 			}
 #endif

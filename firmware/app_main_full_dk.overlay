@@ -1,21 +1,30 @@
 /*
- * nRF52840 DK: MAX86140 on **SPI3** (Arduino D11–D13 + D10 CS) + TMP117 on **I2C0**
- * (Arduino D14/D15 — same pins as app_tmp117_i2c.overlay).
+ * nRF52840 DK **only** — **main.c** full app (prj_full_vitaband.conf). Same logical sensors as
+ * app_vitaband_base, but pinmux matches the DK + Arduino headers.
  *
- * SPI3 and TWIM0 are independent blocks; both can be enabled.
+ * **Do not use this file for the VitaBand PCB** — flash **app_vitaband_base.overlay** instead.
  *
- * If TMP117 NACKs on DK, append pin swap:
- *   -DDTC_OVERLAY_FILE="app_ble_hr_body_dk.overlay;app_tmp117_i2c_dkswap.overlay"
+ *   MAX86140 on **SPI3** (Arduino D11–D13, CS D10) — same as app_ble_hr_body_dk.overlay
+ *   TMP117 + SHT3x on **I2C0** (P0.26 / P0.27 — Arduino A4/A5)
  *
- * west build ... -DCONF_FILE=prj_ble_hr_body.conf \
- *   -DDTC_OVERLAY_FILE=app_ble_hr_body_dk.overlay
+ * Use this instead of app_vitaband_base.overlay when you see vitals stuck at body_raw=-99 / amb=-99
+ * and boot logs showed MAX86140=FAIL (VitaBand overlay maps SPI to the wrong pins for the DK).
+ *
+ * If TMP117 NACKs, try pin swap:
+ *   -DDTC_OVERLAY_FILE="app_main_full_dk.overlay;app_tmp117_i2c_dkswap.overlay"
+ *
+ * SHT3x I2C address 0x45 (ADDR→VDD). Change to 0x44 in-tree if your part uses ADDR→GND.
+ *
+ * west build -b nrf52840dk/nrf52840 -- \
+ *   -DCONF_FILE=prj_full_vitaband.conf \
+ *   -DDTC_OVERLAY_FILE=app_main_full_dk.overlay
  */
 
+#include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
 #include <zephyr/dt-bindings/spi/spi.h>
 
 / {
-	/* prj_ble_hr_body.conf: CONFIG_RTT_CONSOLE=y + CONFIG_SERIAL=n — route printk to Segger RTT */
 	chosen {
 		zephyr,console = &rtt0;
 		zephyr,bt-mon-uart = &rtt0;
@@ -29,13 +38,30 @@
 		status = "okay";
 	};
 
+	leds {
+		status = "disabled";
+		led0: led_0 { status = "disabled"; gpios = <&gpio0 2 GPIO_ACTIVE_LOW>; };
+		led1: led_1 { status = "disabled"; gpios = <&gpio0 3 GPIO_ACTIVE_LOW>; };
+		led3: led_3 { status = "disabled"; gpios = <&gpio0 7 GPIO_ACTIVE_LOW>; };
+	};
+
 	pwmleds {
 		status = "disabled";
+		pwm_led0: pwm_led_0 { status = "disabled"; };
 	};
 
 	aliases {
 		emergency-button = &emergency_button;
 		buzzer = &pwm_buzzer_led;
+		motor-en = &motor_en_line;
+	};
+
+	motor_gpios {
+		compatible = "gpio-leds";
+		motor_en_line: motor_en_line {
+			gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+			label = "motor-en";
+		};
 	};
 
 	buttons {
@@ -63,6 +89,7 @@
 	status = "disabled";
 };
 
+/* VitaBand PCB uses TWIM1 here; on DK we use TWIM0 for the same P0.26/P0.27 header pins. */
 &i2c1 {
 	status = "disabled";
 };
@@ -80,7 +107,7 @@
 };
 
 &pinctrl {
-	i2c0_tmp117: i2c0_tmp117 {
+	i2c0_full_dk: i2c0_full_dk {
 		group1 {
 			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
 				<NRF_PSEL(TWIM_SDA, 0, 27)>;
@@ -88,7 +115,7 @@
 		};
 	};
 
-	i2c0_tmp117_sleep: i2c0_tmp117_sleep {
+	i2c0_full_dk_sleep: i2c0_full_dk_sleep {
 		group1 {
 			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
 				<NRF_PSEL(TWIM_SDA, 0, 27)>;
@@ -121,18 +148,25 @@
 &i2c0 {
 	status = "okay";
 	compatible = "nordic,nrf-twim";
-	pinctrl-0 = <&i2c0_tmp117>;
-	pinctrl-1 = <&i2c0_tmp117_sleep>;
+	pinctrl-0 = <&i2c0_full_dk>;
+	pinctrl-1 = <&i2c0_full_dk_sleep>;
 	pinctrl-names = "default", "sleep";
 	clock-frequency = <100000>;
 
 	tmp117: tmp117@49 {
 		compatible = "ti,tmp117";
 		reg = <0x49>;
+		status = "okay";
+	};
+
+	sht3xdis: sht3xdis@45 {
+		compatible = "sensirion,sht3xd";
+		reg = <0x45>;
+		status = "okay";
 	};
 };
 
-/* Board enables SPI3 + CS=D10; add Maxim node */
+/* Board BSP enables SPI3 on Arduino; add MAX86140 node (same as app_ble_hr_body_dk.overlay). */
 &spi3 {
 	max86140: maxim_max86140@0 {
 		compatible = "maxim,max86140";

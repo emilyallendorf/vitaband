@@ -84,4 +84,13 @@ bool is_hr_sensor_ready(void);
  */
 bool is_temp_sensor_ready(temp_sensor_type_t sensor);
 
+/** True after successful heart_rate_sensor_init(). */
+bool sensors_hr_hw_initialized(void);
+
+/** True after successful temperature_sensor_init(BODY). */
+bool sensors_body_temp_hw_initialized(void);
+
+/** True after successful temperature_sensor_init(AMBIENT). */
+bool sensors_ambient_temp_hw_initialized(void);
+
 #endif // SENSORS_H

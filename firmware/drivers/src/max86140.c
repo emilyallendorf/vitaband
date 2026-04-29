@@ -533,7 +533,14 @@ int max86140_init(void)
     k_msleep(10);   /* datasheet: allow reset / POR to complete */
 
     uint8_t part_id = 0;
+    unsigned int part_id_attempts = 0U;
+
     while (part_id == 0 || part_id == 0xFF) {
+        if (++part_id_attempts > 60U) {
+            LOG_ERR("Part ID poll gave up: last 0x%02x after %u tries (check SPI wiring/CS/3V3, overlay)",
+                    part_id, part_id_attempts);
+            return -EIO;
+        }
         ret = max86140_read_reg(REG_PART_ID, &part_id);
         if (ret != 0) {
             LOG_ERR("Failed to read Part ID: %d", ret);

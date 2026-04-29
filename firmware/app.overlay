@@ -1,0 +1,127 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+
+/ {
+	chosen {
+		zephyr,console = &rtt0;
+		zephyr,shell-uart = &rtt0;
+		zephyr,bt-mon-uart = &rtt0;
+	};
+
+	rtt0: rtt_chan0 {
+		compatible = "segger,rtt-uart";
+		status = "okay";
+	};
+
+	aliases {
+		emergency-button = &emergency_button;
+		buzzer = &pwm_buzzer_led;
+		motor-en = &motor_en_line;
+	};
+
+	motor_gpios {
+		compatible = "gpio-leds";
+		motor_en_line: motor_en_line {
+			gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+			label = "motor-en";
+		};
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		emergency_button: emergency_button {
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Emergency Button";
+		};
+	};
+
+	pwm_buzzer_group {
+		compatible = "pwm-leds";
+		pwm_buzzer_led: pwm_buzzer_led {
+			pwms = <&pwm0 0 250000 PWM_POLARITY_NORMAL>;
+			label = "buzzer-pwm";
+		};
+	};
+};
+
+/* CRITICAL: Disable everything else to resolve BUILD_ASSERT conflicts */
+&uart0 { status = "disabled"; };
+&i2c0  { status = "disabled"; }; /* Free up ID 0 for SPI0 */
+&spi1  { status = "disabled"; }; /* Free up ID 1 for I2C1 */
+
+&pinctrl {
+	spi0_max_default: spi0_max_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>,
+				<NRF_PSEL(SPIM_MISO, 0, 13)>;
+		};
+	};
+	spi0_max_sleep: spi0_max_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>,
+				<NRF_PSEL(SPIM_MISO, 0, 13)>;
+			low-power-enable;
+		};
+	};
+
+	i2c1_tmp_default: i2c1_tmp_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			bias-pull-up;
+		};
+	};
+	i2c1_tmp_sleep: i2c1_tmp_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			low-power-enable;
+		};
+	};
+
+	pwm0_default_vb: pwm0_default_vb {
+		group1 { psels = <NRF_PSEL(PWM_OUT0, 0, 5)>; };
+	};
+	pwm0_sleep_vb: pwm0_sleep_vb {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			low-power-enable;
+		};
+	};
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_default_vb>;
+	pinctrl-1 = <&pwm0_sleep_vb>;
+	pinctrl-names = "default", "sleep";
+};
+
+&spi0 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi0_max_default>;
+	pinctrl-1 = <&spi0_max_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+	/delete-property/ duplex;
+	max86140: maxim_max86140@0 {
+		compatible = "maxim,max86140";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+	};
+};
+
+&i2c1 {
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	pinctrl-0 = <&i2c1_tmp_default>;
+	pinctrl-1 = <&i2c1_tmp_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+	tmp117: tmp117@49 { compatible = "ti,tmp117"; reg = <0x49>; };
+	sht3xdis: sht3xdis@45 { compatible = "sensirion,sht3xd"; reg = <0x45>; status = "okay"; };
+};

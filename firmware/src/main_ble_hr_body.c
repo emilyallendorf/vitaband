@@ -253,8 +253,6 @@ int main(void)
 
 		if (now - last_notify >= NOTIFY_PERIOD_MS) {
 			last_notify = now;
-			printk("ble-hr-body: hr~%u body=%.2f C\n", (unsigned int)hr_smooth,
-			       (double)last_body_c);
 
 			if (vitaband_health_notify_enabled()) {
 				uint8_t hr_send = (hr_smooth > 0U) ? hr_smooth : 1U;
@@ -262,7 +260,7 @@ int main(void)
 					(hr_smooth > 0U) ? hr_smooth : hr_send;
 				uint8_t risk = calculate_risk_score(last_body_c, base_skin_c, hr_for_psi,
 								    base_hr_bpm);
-				printk("ble-hr-body: notify HR=%u body=%.2f C risk=%u\n",
+				printk("ble-hr-body: HR=%u body=%.2f C risk=%u\n",
 				       (unsigned int)hr_send, (double)last_body_c, (unsigned int)risk);
 
 				err = vitaband_health_notify(hr_send, last_body_c, AMBIENT_C_FIXED, OK,
@@ -270,6 +268,9 @@ int main(void)
 				if (err != 0) {
 					printk("ble-hr-body: notify err %d\n", err);
 				}
+			} else {
+				printk("ble-hr-body: HR=%u body=%.2f C (no BLE notify)\n",
+				       (unsigned int)hr_smooth, (double)last_body_c);
 			}
 		}
 

@@ -84,6 +84,9 @@ int tmp117_init(void) {
         return ret;
     }
 
+    /* First conversion after CC mode needs time (datasheet ~15 ms typical). */
+    k_msleep(25);
+
     LOG_DBG("TMP117 initialized. ID: 0x%04x", device_id);
     return 0;
 }

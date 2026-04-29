@@ -1,8 +1,15 @@
 #include "state_manager.h"
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
 #include <stdlib.h>
+
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+#include "haptics.h"
+#endif
+
+static void execute_state_actions(vitaband_state_t state);
 
 bool emergency_long_press = false;
 
@@ -195,11 +202,20 @@ void handle_state_transition(vitaband_state_t old_state, vitaband_state_t new_st
 
     LOG_DBG("Transitioning: %d -> %d", old_state, new_state);
 
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+	/* Full app links haptics.c; ble-hr-body image does not — buzzer only there via PWM in main. */
+	if (old_state == EMERGENCY && new_state != EMERGENCY) {
+		haptics_buzzer_stop();
+	}
+#endif
+
     /* 1. Perform one-shot actions based on the NEW state */
     switch (new_state) {
         case OK:
             LOG_DBG("Action: system stabilized, clearing alerts");
-            // haptics_stop_all(); // Example: Stop any warning vibrations
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+	    haptics_stop_all();
+#endif
             break;
 
         case WARNING:
@@ -212,6 +228,12 @@ void handle_state_transition(vitaband_state_t old_state, vitaband_state_t new_st
 
         case EMERGENCY:
             LOG_ERR("Action: EMERGENCY! Activating Buzzer and BLE SOS.");
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+	    if (old_state != EMERGENCY) {
+		    /* 4000 Hz = piezo resonant; duration 0 = until exit from EMERGENCY (see stop above). */
+		    haptics_buzzer_beep(4000U, 0U);
+	    }
+#endif
             break;
 
         default:
