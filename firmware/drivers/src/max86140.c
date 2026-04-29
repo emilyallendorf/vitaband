@@ -14,11 +14,21 @@
 #endif
 #endif
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/printk.h>
 #include <limits.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(max86140, LOG_LEVEL_INF);
+
+#if IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+#undef LOG_DBG
+#undef LOG_INF
+#undef LOG_WRN
+#undef LOG_ERR
+#define LOG_DBG(...) ((void)0)
+#define LOG_INF(...) ((void)0)
+#define LOG_WRN(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+#endif
 
 /* ══════════════════════════════════════════════════════════════════════════
  * REGISTER MAP  (MAX86140/MAX86141 datasheet Rev.5)
@@ -309,26 +319,16 @@ static void max86140_cs_scope_probe(void)
     const struct device *gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 
     if (!device_is_ready(gpio0)) {
-        printk("gpio0 not ready!\n");
+        LOG_ERR("gpio0 not ready (CS GPIO debug)");
         return -ENODEV;
     }
 
     while (1) {
-        gpio_pin_configure(gpio0, 14, flags);   /* drive high */
-        printk("P0.14 HIGH — measure now\n");
+        gpio_pin_configure(gpio0, 14, flags);
         k_msleep(3000);
-
-        gpio_pin_set(gpio0, 14, 0);   /* drive low */
-        printk("P0.14 LOW — measure now\n");
+        gpio_pin_set(gpio0, 14, 0);
         k_msleep(3000);
     }
-    gpio_pin_configure(gpio0, 14, GPIO_OUTPUT_ACTIVE);   /* drive high */
-    printk("P0.14 HIGH — measure now\n");
-    k_msleep(1000);
-
-    gpio_pin_set(gpio0, 14, 0);   /* drive low */
-    printk("P0.14 LOW — measure now\n");
-    k_msleep(10000);
 }
 #endif
 
@@ -437,27 +437,12 @@ static int32_t  dbg_prom_delta;
 static uint8_t  dbg_hr_skip_code; /* 0=none, 2=prominence fail (≥4 peaks) */
 static uint32_t dbg_iv_smooth_ms;
 
-/* Rate-limited diagnostic (default log level hides unless LOG_DBG enabled). */
+/* Hook kept for call sites; verbose FIFO/HR tracing removed from console. */
 static void max86140_rtt_status(uint32_t t, int fifo_ret, bool have_ir_batch)
 {
-	static uint32_t last_ms;
-
-	if (t - last_ms < 1000U) {
-		return;
-	}
-	last_ms = t;
-
-	if (!have_ir_batch) {
-		LOG_DBG("fifo_ret=%d fifo_reg=%u (waiting for FIFO / SPI)", fifo_ret,
-			(unsigned int)dbg_fifo_reg_count);
-		return;
-	}
-
-	LOG_DBG("n=%u fifo_reg=%u ir_min=%d ir_max=%d mean=%d thr=%d peaks=%u iv_ms=%u "
-		"cand_bpm=%u rej=%u hr=%u",
-		(unsigned int)dbg_fifo_n, (unsigned int)dbg_fifo_reg_count, dbg_ir_min,
-		dbg_ir_max, dbg_mean, dbg_thresh, (unsigned int)dbg_peak_count,
-		dbg_interval_ms, dbg_cand_bpm, (unsigned int)dbg_rejected, calculated_hr);
+	ARG_UNUSED(t);
+	ARG_UNUSED(fifo_ret);
+	ARG_UNUSED(have_ir_batch);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -475,22 +460,7 @@ static int max86140_write_reg(uint8_t reg, uint8_t val)
     struct spi_buf_set tx_set = { .buffers = &tx_spi, .count = 1 };
 
     int ret = spi_write_dt(&spi_dev, &tx_set);
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
-    /* #region agent log */
-    {
-        static uint32_t agent_spi_writes;
 
-        if (++agent_spi_writes <= 12U) {
-            printk("{\"sessionId\":\"75362d\",\"runId\":\"spi-cmd\",\"hypothesisId\":\"H3\","
-                   "\"location\":\"max86140.c:max86140_write_reg\",\"message\":\"spi_tx\","
-                   "\"data\":{\"ret\":%d,\"reg\":\"0x%02x\",\"val\":\"0x%02x\",\"n\":%u},"
-                   "\"timestamp\":%u}\n",
-                   ret, reg, val, (unsigned int)agent_spi_writes,
-                   (unsigned int)k_uptime_get_32());
-        }
-    }
-    /* #endregion */
-#endif
     return ret;
 }
 
@@ -508,23 +478,7 @@ static int max86140_read_reg(uint8_t reg, uint8_t *val)
     struct spi_buf_set rx_set = { .buffers = &rx_spi, .count = 1 };
 
     int ret = spi_transceive_dt(&spi_dev, &tx_set, &rx_set);
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
-    /* #region agent log */
-    {
-        static uint32_t agent_spi_reads;
 
-        if (++agent_spi_reads <= 48U) {
-            printk("{\"sessionId\":\"75362d\",\"runId\":\"spi-cmd\",\"hypothesisId\":\"H1_H2\","
-                   "\"location\":\"max86140.c:max86140_read_reg\",\"message\":\"spi_rx\","
-                   "\"data\":{\"ret\":%d,\"reg\":\"0x%02x\",\"tx0\":\"0x%02x\",\"tx1\":\"0x%02x\","
-                   "\"rx0\":\"0x%02x\",\"rx1\":\"0x%02x\",\"rx2\":\"0x%02x\",\"n\":%u},\"timestamp\":%u}\n",
-                   ret, reg, tx[0], tx[1], rx[0], rx[1], rx[2],
-                   (unsigned int)agent_spi_reads,
-                   (unsigned int)k_uptime_get_32());
-        }
-    }
-    /* #endregion */
-#endif
     if (ret == 0) {
         *val = rx[2];
     }
@@ -568,14 +522,12 @@ int max86140_init(void)
 
     if (!spi_is_ready_dt(&spi_dev)) {
         LOG_ERR("SPI bus not ready for MAX86140");
-        printk("max86140: SPI bus not ready\n");
         return -ENODEV;
     }
     /* ── 1. Software reset, then Part ID — read after reset avoids junk at cold start ── */
     int ret = max86140_write_reg(REG_SYSTEM_CTRL, SYS_RESET);
     if (ret != 0) {
         LOG_ERR("Reset failed: %d", ret);
-        printk("max86140: reset write failed ret=%d\n", ret);
         return ret;
     }
     k_msleep(10);   /* datasheet: allow reset / POR to complete */
@@ -585,20 +537,17 @@ int max86140_init(void)
         ret = max86140_read_reg(REG_PART_ID, &part_id);
         if (ret != 0) {
             LOG_ERR("Failed to read Part ID: %d", ret);
-            printk("max86140: Part ID read failed ret=%d\n", ret);
             return ret;
         }
         if (part_id != MAX86140_PART_ID) {
-            LOG_ERR("Unexpected Part ID: 0x%02x (expected 0x%02x)",
+            LOG_ERR("Unexpected Part ID: 0x%02x (expected 0x%02x) — retry",
                     part_id, MAX86140_PART_ID);
-            printk("max86140: Part ID 0x%02x — abort (expect part 0x%02x)\n",
-                part_id, MAX86140_PART_ID);}
-            k_msleep(100);   /* wait for sensor to respond after reset */
+            k_msleep(100);
+        }
     }
     ret = max86140_read_reg(REG_PART_ID, &part_id);
     if (ret != 0) {
         LOG_ERR("Failed to read Part ID: %d", ret);
-        printk("max86140: Part ID read failed ret=%d\n", ret);
         return ret;
     }
 
@@ -606,20 +555,17 @@ int max86140_init(void)
     max86140_read_reg(REG_REV_ID, &rev_id);
 
     if (part_id != MAX86140_PART_ID) {
-        LOG_ERR("Unexpected Part ID: 0x%02x (expected 0x%02x)",
-                part_id, MAX86140_PART_ID);
-        printk("max86140: Part ID 0x%02x rev 0x%02x — abort (expect part 0x%02x)\n",
-               part_id, rev_id, MAX86140_PART_ID);
-        printk("max86140: hint 0x00 = MISO low / wrong SPI mode / bad level shift / overlay\n");
+        LOG_ERR("Unexpected Part ID: 0x%02x rev 0x%02x (expected 0x%02x); "
+                "hint 0x00 = MISO/SPI mode/shift/overlay",
+                part_id, rev_id, MAX86140_PART_ID);
         return -EIO;
     }
-    LOG_INF("MAX86140 detected. Part ID: 0x%02x", part_id);
+    LOG_DBG("MAX86140 detected. Part ID: 0x%02x", part_id);
 
     /* Clear LED range scaling (31 mA full scale per channel); stale non-zero skews PA. */
     ret = max86140_write_reg(REG_LED_RANGE_1, 0x00);
     if (ret != 0) {
         LOG_ERR("LED_RANGE_1 failed: %d", ret);
-        printk("max86140: LED_RANGE_1 failed ret=%d\n", ret);
         return ret;
     }
 
@@ -630,7 +576,6 @@ int max86140_init(void)
     ret = max86140_write_reg(REG_FIFO_CONFIG_1, 0x10);
     if (ret != 0) {
         LOG_ERR("FIFO config 1 failed: %d", ret);
-        printk("max86140: FIFO_CONFIG_1 failed ret=%d\n", ret);
         return ret;
     }
 
@@ -638,7 +583,6 @@ int max86140_init(void)
                              FIFO_ROLL_ON_FULL | FIFO_STAT_CLR);
     if (ret != 0) {
         LOG_ERR("FIFO config 2 failed: %d", ret);
-        printk("max86140: FIFO_CONFIG_2 failed ret=%d\n", ret);
         return ret;
     }
 
@@ -651,7 +595,6 @@ int max86140_init(void)
                              PPG_ADC_RGE_32UA | PPG_TINT_117US);
     if (ret != 0) {
         LOG_ERR("PPG config 1 failed: %d", ret);
-        printk("max86140: PPG_CONFIG_1 failed ret=%d\n", ret);
         return ret;
     }
 
@@ -667,7 +610,6 @@ int max86140_init(void)
 #endif
     if (ret != 0) {
         LOG_ERR("PPG config 2 failed: %d", ret);
-        printk("max86140: PPG_CONFIG_2 failed ret=%d\n", ret);
         return ret;
     }
     /* ── 5. Configure LED sequence ──
@@ -686,21 +628,18 @@ int max86140_init(void)
 #endif
     if (ret != 0) {
         LOG_ERR("LED seq 1 failed: %d", ret);
-        printk("max86140: LED_SEQ_1 failed ret=%d\n", ret);
         return ret;
     }
 
     ret = max86140_write_reg(REG_LED_SEQ_2, 0x00);  /* slots 3+4 off */
     if (ret != 0) {
         LOG_ERR("LED seq 2 failed: %d", ret);
-        printk("max86140: LED_SEQ_2 failed ret=%d\n", ret);
         return ret;
     }
 
     ret = max86140_write_reg(REG_LED_SEQ_3, 0x00);  /* slots 5+6 off */
     if (ret != 0) {
         LOG_ERR("LED seq 3 failed: %d", ret);
-        printk("max86140: LED_SEQ_3 failed ret=%d\n", ret);
         return ret;
     }
 
@@ -711,7 +650,6 @@ int max86140_init(void)
     ret = max86140_write_reg(REG_LED1_PA, led_pa_ir);
     if (ret != 0) {
         LOG_ERR("LED1 PA failed: %d", ret);
-        printk("max86140: LED1_PA failed ret=%d\n", ret);
         return ret;
     }
 
@@ -719,36 +657,22 @@ int max86140_init(void)
     ret = max86140_write_reg(REG_LED2_PA, led_pa_red);
     if (ret != 0) {
         LOG_ERR("LED2 PA failed: %d", ret);
-        printk("max86140: LED2_PA failed ret=%d\n", ret);
         return ret;
     }
 #else
     ret = max86140_write_reg(REG_LED2_PA, 0x00);
     if (ret != 0) {
         LOG_ERR("LED2 PA off failed: %d", ret);
-        printk("max86140: LED2_PA off failed ret=%d\n", ret);
         return ret;
     }
 
     led_pa_red = 0U;
 #endif
 
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_400_IR)
-    printk("max86140: ready (ADC 32µA FS, PA=0x%02x, ~400 SPS IR-only N=1)\n",
-           led_pa_ir);
-#elif IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_200_IR)
-    printk("max86140: ready (ADC 32µA FS, PA=0x%02x, ~200 SPS IR-only N=1)\n",
-           led_pa_ir);
-#else
-    printk("max86140: ready (ADC 32µA FS, PA=0x%02x, ~100 SPS IR+Red N=2)\n",
-           led_pa_ir);
-#endif
-
     /* ── 7. Enable interrupts: A_FULL and PPG_RDY ── */
     ret = max86140_write_reg(REG_INT_ENABLE_1, INT_A_FULL | INT_PPG_RDY);
     if (ret != 0) {
         LOG_ERR("INT enable failed: %d", ret);
-        printk("max86140: INT_ENABLE failed ret=%d\n", ret);
         return ret;
     }
 
@@ -762,7 +686,6 @@ int max86140_init(void)
                              FIFO_FLUSH | FIFO_ROLL_ON_FULL | FIFO_STAT_CLR);
     if (ret != 0) {
         LOG_ERR("FIFO flush failed: %d", ret);
-        printk("max86140: FIFO flush failed ret=%d\n", ret);
         return ret;
     }
 
@@ -771,7 +694,6 @@ int max86140_init(void)
                              FIFO_ROLL_ON_FULL | FIFO_STAT_CLR);
     if (ret != 0) {
         LOG_ERR("FIFO re-arm failed: %d", ret);
-        printk("max86140: FIFO re-arm failed ret=%d\n", ret);
         return ret;
     }
 
@@ -779,11 +701,10 @@ int max86140_init(void)
     ret = max86140_write_reg(REG_SYSTEM_CTRL, 0x00);
     if (ret != 0) {
         LOG_ERR("Exit shutdown failed: %d", ret);
-        printk("max86140: exit shutdown failed ret=%d\n", ret);
         return ret;
     }
 
-    LOG_INF("MAX86140 initialized successfully");
+    LOG_DBG("MAX86140 initialized successfully");
 
     /* Fresh HR state matches a freshly configured part (avoids stale EMA across experiments). */
     hr_contact_lost_reset();
@@ -804,7 +725,6 @@ static int max86140_read_fifo(uint8_t *sample_count_out, int32_t *ir_out)
     /* #endregion */
     if (ret != 0) {
         LOG_ERR("FIFO count read failed: %d", ret);
-        printk("max86140: FIFO_DATA_COUNT read failed ret=%d\n", ret);
         return ret;
     }
     if (fifo_count == 0) {
@@ -839,9 +759,8 @@ static int max86140_read_fifo(uint8_t *sample_count_out, int32_t *ir_out)
     static uint8_t raw[MAX_FIFO_WORDS * BYTES_PER_SAMPLE];
     ret = max86140_read_fifo_burst(words, raw);
     if (ret != 0) {
-        LOG_ERR("FIFO burst read failed: %d", ret);
-        printk("max86140: FIFO burst read failed ret=%d (len=%u words)\n",
-               ret, (unsigned int)words);
+        LOG_ERR("FIFO burst read failed: %d (len=%u words)", ret,
+                (unsigned int)words);
         return ret;
     }
 
@@ -899,7 +818,6 @@ static int max86140_read_fifo(uint8_t *sample_count_out, int32_t *ir_out)
     /* #region agent log */
     dbg_fifo_n = n_ir;
     /* #endregion */
-    LOG_DBG("Read %u IR samples (tag-checked)", (unsigned int)n_ir);
     return 0;
 }
 
@@ -1120,8 +1038,6 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
 
                     calculated_hr = hr_output_ema;
                     last_peak_tick = peak_tick;
-                    LOG_DBG("HR: %u BPM (interval raw %u ms smooth %u ms)",
-                        calculated_hr, interval_ms, iv_smooth);
                 } else {
                     /* #region agent log */
                     dbg_rejected = 1;
@@ -1140,46 +1056,6 @@ static uint8_t max86140_calculate_hr(int32_t *samples, uint8_t n, uint32_t batch
     if (best_i >= 1 && dbg_second_best_amp != INT32_MIN) {
         dbg_prom_delta = samples[best_i] - dbg_second_best_amp;
     }
-
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PP_TRACE)
-    /* #region agent log NDJSON — capture RTT → paste .cursor/debug-75362d.log for analysis */
-    {
-        static uint32_t hr_ndj_last;
-        uint32_t tu = k_uptime_get_32();
-
-        if (n >= 3U && tu - hr_ndj_last >= 1000U) {
-            hr_ndj_last = tu;
-            printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_peak\",\"location\":\"max86140_calculate_hr\","
-                   "\"message\":\"hr_batch\",\"data\":{\"peaks\":%u,\"skip\":%u,\"prom_delta\":%d,"
-                   "\"pp\":%d,\"iv_raw\":%u,\"iv_smooth\":%u,\"cand\":%u,\"hr\":%u},\"timestamp\":%u}\n",
-                   (unsigned int)dbg_peak_count, (unsigned int)dbg_hr_skip_code, (int)dbg_prom_delta,
-                   (int)(dbg_ir_max - dbg_ir_min), dbg_interval_ms, dbg_iv_smooth_ms, dbg_cand_bpm,
-                   (unsigned int)calculated_hr, (unsigned int)tu);
-        }
-    }
-    /* #endregion */
-#endif
-
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
-    /* #region agent log */
-    {
-        static uint32_t hr_agent_last;
-
-        uint32_t tu = k_uptime_get_32();
-
-        if (n >= 3U && tu - hr_agent_last >= 500U) {
-            hr_agent_last = tu;
-            printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_tick\",\"location\":\"max86140_calculate_hr\","
-                   "\"message\":\"hr_batch\",\"data\":{\"n\":%u,\"batch_start\":%u,\"last_peak_tick\":%u,"
-                   "\"peaks\":%u,\"iv_ms\":%u,\"cand_bpm\":%u,\"rej\":%u,\"hr\":%u},\"timestamp\":%u}\n",
-                   (unsigned int)n, (unsigned int)batch_start_tick,
-                   (unsigned int)last_peak_tick, (unsigned int)dbg_peak_count,
-                   dbg_interval_ms, dbg_cand_bpm, (unsigned int)dbg_rejected,
-                   (unsigned int)calculated_hr, (unsigned int)tu);
-        }
-    }
-    /* #endregion */
-#endif
 
     return calculated_hr;
 }
@@ -1204,26 +1080,6 @@ static void max86140_ir_autogain_rail_flat(const int32_t *ir, uint8_t n)
     }
 
     int32_t pp = mx - mn;
-
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
-    /* #region agent log */
-    {
-        static uint32_t sat_gate_last;
-
-        uint32_t tg = k_uptime_get_32();
-
-        if ((uint32_t)(tg - sat_gate_last) >= 2500U && mx >= IR_SAT_NEAR_FULL &&
-            pp <= IR_SAT_FLAT_MIN_PP) {
-            sat_gate_last = tg;
-            printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_sat_gate\",\"location\":\"auto_rail_flat\","
-                   "\"message\":\"sat_candidate\",\"data\":{\"mx\":%d,\"pp\":%d,\"pa\":%u,"
-                   "\"floor\":%u,\"thr_ok\":1},\"timestamp\":%u}\n",
-                   (int)mx, (int)pp, (unsigned int)led_pa_ir, (unsigned int)LED_PA_FLOOR,
-                   (unsigned int)tg);
-        }
-    }
-    /* #endregion */
-#endif
 
     if (mx < IR_SAT_NEAR_FULL || pp > IR_SAT_FLAT_MIN_PP) {
         return;
@@ -1265,16 +1121,8 @@ static void max86140_ir_autogain_rail_flat(const int32_t *ir, uint8_t n)
 #endif
 
     if (wr1 != 0 || wr2 != 0) {
-        printk("max86140: LED PA dim SPI failed wr1=%d wr2=%d (tried 0x%02x)\n",
-               wr1, wr2, new_pa);
-
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
-        /* #region agent log */
-        printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_sat_spi\",\"location\":\"auto_rail_flat\","
-               "\"message\":\"led_dim_spi_fail\",\"data\":{\"wr1\":%d,\"wr2\":%d,\"pa\":%u},\"timestamp\":%u}\n",
-               wr1, wr2, (unsigned int)new_pa, (unsigned int)now);
-        /* #endregion */
-#endif
+        LOG_ERR("LED PA dim SPI failed wr1=%d wr2=%d (tried 0x%02x)", wr1, wr2,
+                new_pa);
         return;
     }
 
@@ -1282,16 +1130,6 @@ static void max86140_ir_autogain_rail_flat(const int32_t *ir, uint8_t n)
     led_pa_ir = new_pa;
 #if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PPG_100_IRRED)
     led_pa_red = new_pa;
-#endif
-
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_AGENT_LOG)
-    printk("max86140: IR rail-flat → LED PA=0x%02x (max=%d pp=%d)\n",
-           led_pa_ir, (int)mx, (int)pp);
-    /* #region agent log */
-    printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_sat\",\"location\":\"max86140_ir_autogain_rail_flat\","
-           "\"message\":\"led_dim\",\"data\":{\"mx\":%d,\"pp\":%d,\"pa\":%u},\"timestamp\":%u}\n",
-           (int)mx, (int)pp, (unsigned int)led_pa_ir, (unsigned int)now);
-    /* #endregion */
 #endif
 
     hr_reanchor_after_led_autogain();
@@ -1373,9 +1211,6 @@ static void max86140_ir_recover_near_floor(const int32_t *ir, uint8_t n)
     led_pa_red = nu;
 #endif
 
-    printk("max86140: near-floor rail-flat → LED PA=0x%02x (mn=%d mx=%d pp=%d)\n",
-           led_pa_ir, (int)mn, (int)mx, (int)pp);
-
     hr_reanchor_after_led_autogain();
 }
 
@@ -1436,30 +1271,6 @@ uint8_t max86140_read_heartrate(void)
     ir_sample_index += (uint32_t)n;
 
     max86140_calculate_hr(ir_samples, n, batch_tick);
-
-#if IS_ENABLED(CONFIG_VITABAND_MAX86140_HR_PP_TRACE)
-    /* #region hr_pp_trace */
-    if (n > 0U) {
-        static uint32_t pp_trace_last;
-
-        uint32_t nowp = k_uptime_get_32();
-
-        if (nowp - pp_trace_last >= 1000U) {
-            pp_trace_last = nowp;
-            printk("max86140 pp: n=%u min=%d max=%d pp=%d mean=%d thr=%d peaks=%u "
-                   "skip=%u prom_d=%d iv_raw=%u iv_smooth=%u bpm=%u\n",
-                   (unsigned int)n, dbg_ir_min, dbg_ir_max,
-                   dbg_ir_max - dbg_ir_min,
-                   dbg_mean, dbg_thresh,
-                   (unsigned int)dbg_peak_count,
-                   (unsigned int)dbg_hr_skip_code,
-                   (int)dbg_prom_delta,
-                   dbg_interval_ms, dbg_iv_smooth_ms,
-                   (unsigned int)hr_wrist_display_bpm(calculated_hr));
-        }
-    }
-    /* #endregion */
-#endif
 
     max86140_ir_autogain_rail_flat(ir_samples, n);
     max86140_ir_recover_near_floor(ir_samples, n);

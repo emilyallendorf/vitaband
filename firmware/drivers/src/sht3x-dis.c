@@ -2,10 +2,9 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/types.h>
-#include <zephyr/sys/printk.h>
 #include "sht3x-dis.h"
 
-LOG_MODULE_REGISTER(sht3xdis, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(sht3xdis, LOG_LEVEL_DBG);
 
 /* Single Shot Data Acquisition (High Repeatability, clock stretching) */
 #define SHT3X_CMD_MEAS_CLOCKSTR_H  0x2C06
@@ -16,23 +15,13 @@ LOG_MODULE_REGISTER(sht3xdis, LOG_LEVEL_INF);
 
 static const struct i2c_dt_spec i2c_dev = I2C_DT_SPEC_GET(DT_NODELABEL(sht3xdis));
 
-// static int sht3xdis_send_cmd(uint16_t cmd)
-// {
-// 	uint8_t cmd_buf[2];
-
-// 	cmd_buf[0] = (uint8_t)((cmd >> 8) & 0xFF);
-// 	cmd_buf[1] = (uint8_t)(cmd & 0xFF);
-// 	return i2c_write_dt(&i2c_dev, cmd_buf, sizeof(cmd_buf));
-// }
-
-static const struct device *i2c_bus = DEVICE_DT_GET(DT_NODELABEL(i2c0));
-
 static int sht3xdis_send_cmd(uint16_t cmd)
 {
-    uint8_t cmd_buf[2];
-    cmd_buf[0] = (uint8_t)((cmd >> 8) & 0xFF);
-    cmd_buf[1] = (uint8_t)(cmd & 0xFF);
-    return i2c_write(i2c_bus, cmd_buf, sizeof(cmd_buf), 0x45);
+	uint8_t cmd_buf[2];
+
+	cmd_buf[0] = (uint8_t)((cmd >> 8) & 0xFF);
+	cmd_buf[1] = (uint8_t)(cmd & 0xFF);
+	return i2c_write_dt(&i2c_dev, cmd_buf, sizeof(cmd_buf));
 }
 
 static int sht3xdis_read_data(uint8_t *buffer, size_t len)
@@ -42,26 +31,21 @@ static int sht3xdis_read_data(uint8_t *buffer, size_t len)
 
 int sht3xdis_init(void)
 {
-
-	printk("SHT3x I2C addr: 0x%02x\n", i2c_dev.addr);
-	printk("SHT3x bus ready: %d\n", device_is_ready(i2c_dev.bus));
-	printk("SHT3x bus name: %s\n", i2c_dev.bus->name);
-
 	if (!device_is_ready(i2c_dev.bus)) {
-		printk("I2C bus not ready for SHT3x\n");
+		LOG_ERR("I2C bus not ready for SHT3x");
 		return -ENODEV;
 	}
 
-	  k_msleep(2000);
+	k_msleep(2000);
 
 	int ret = sht3xdis_send_cmd(SHT3X_CMD_SOFT_RESET);
 	if (ret != 0) {
-		printk("SHT3x soft reset failed: %d\n", ret);
+		LOG_ERR("SHT3x soft reset failed: %d", ret);
 		return ret;
 	}
 	k_msleep(2);
 
-	LOG_INF("SHT3x-DIS initialized");
+	LOG_DBG("SHT3x-DIS initialized");
 	return 0;
 }
 

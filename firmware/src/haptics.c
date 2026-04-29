@@ -17,7 +17,7 @@
 #define HAPTICS_HAS_LED 0
 #endif
 
-LOG_MODULE_REGISTER(haptics, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(haptics, LOG_LEVEL_DBG);
 
 /* ========================================================================== */
 /* HARDWARE SPECIFICATIONS                                                    */
@@ -329,7 +329,7 @@ int haptics_init(void)
 {
     int ret;
     
-	LOG_INF("Initializing haptics system");
+	LOG_DBG("Initializing haptics system");
 
 #if HAPTICS_HAS_LED
 	if (!gpio_is_ready_dt(&led)) {
@@ -377,7 +377,7 @@ int haptics_init(void)
     /* Turn everything off initially */
     haptics_stop_all();
     
-    LOG_INF("Haptics initialized");
+    LOG_DBG("Haptics initialized");
     return 0;
 }
 
@@ -393,7 +393,7 @@ void haptics_set_pattern(device_state_t state, const haptic_pattern_t *pattern)
     }
     
     memcpy(&user_patterns[state], pattern, sizeof(haptic_pattern_t));
-    LOG_INF("Updated pattern for state %d", state);
+    LOG_DBG("Updated pattern for state %d", state);
 }
 
 void haptics_get_pattern(device_state_t state, haptic_pattern_t *pattern)
@@ -409,7 +409,7 @@ void haptics_get_pattern(device_state_t state, haptic_pattern_t *pattern)
 void haptics_reset_to_defaults(void)
 {
     memcpy(user_patterns, default_patterns, sizeof(default_patterns));
-    LOG_INF("Reset all patterns to defaults");
+    LOG_DBG("Reset all patterns to defaults");
 }
 
 /* ========================================================================== */
@@ -425,7 +425,7 @@ void haptics_trigger_alert(device_state_t state)
     
     haptic_pattern_t *pattern = &user_patterns[state];
     
-    LOG_INF("Triggering alert for state %d", state);
+    LOG_DBG("Triggering alert for state %d", state);
     
     /* LED */
     if (pattern->led_enabled) {
@@ -553,34 +553,34 @@ void haptics_pattern_from_bytes(haptic_pattern_t *pattern, const uint8_t *buffer
 
 void haptics_test_all(void)
 {
-    LOG_INF("=== Haptics Test Sequence ===");
+    LOG_DBG("=== Haptics Test Sequence ===");
     
     /* Test LED */
-    LOG_INF("Testing LED...");
+    LOG_DBG("Testing LED...");
     haptics_led_set(true);
     k_msleep(500);
     haptics_led_set(false);
     k_msleep(500);
     
     /* Test vibration */
-    LOG_INF("Testing vibration motor...");
+    LOG_DBG("Testing vibration motor...");
     haptics_vibration_pulse(100, 500);
     k_msleep(1000);
     
     /* Test buzzer at different frequencies */
-    LOG_INF("Testing buzzer - 1 kHz");
+    LOG_DBG("Testing buzzer - 1 kHz");
     haptics_buzzer_beep(1000, 300);
     k_msleep(500);
     
-    LOG_INF("Testing buzzer - 2 kHz");
+    LOG_DBG("Testing buzzer - 2 kHz");
     haptics_buzzer_beep(2000, 300);
     k_msleep(500);
     
-    LOG_INF("Testing buzzer - 4 kHz (resonant)");
+    LOG_DBG("Testing buzzer - 4 kHz (resonant)");
     haptics_buzzer_beep(4000, 300);
     k_msleep(500);
     
-    LOG_INF("Haptics test complete");
+    LOG_DBG("Haptics test complete");
 }
 
 void haptics_print_pattern(device_state_t state)
@@ -591,16 +591,16 @@ void haptics_print_pattern(device_state_t state)
     
     haptic_pattern_t *p = &user_patterns[state];
     
-    LOG_INF("=== Pattern for state %d ===", state);
-    LOG_INF("LED: %s, Pattern: %d, Duration: %u ms",
+    LOG_DBG("=== Pattern for state %d ===", state);
+    LOG_DBG("LED: %s, Pattern: %d, Duration: %u ms",
             p->led_enabled ? "ON" : "OFF",
             p->led_pattern,
             p->led_duration_ms);
-    LOG_INF("Vibration: %s, Intensity: %u%%, Duration: %u ms",
+    LOG_DBG("Vibration: %s, Intensity: %u%%, Duration: %u ms",
             p->vibration_enabled ? "ON" : "OFF",
             p->vibration_intensity,
             p->vibration_duration_ms);
-    LOG_INF("Buzzer: %s, Frequency: %u Hz, Duration: %u ms",
+    LOG_DBG("Buzzer: %s, Frequency: %u Hz, Duration: %u ms",
             p->buzzer_enabled ? "ON" : "OFF",
             p->buzzer_frequency_hz,
             p->buzzer_duration_ms);

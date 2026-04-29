@@ -7,7 +7,7 @@
 #include <zephyr/logging/log.h>
 
 
-LOG_MODULE_REGISTER(sensors, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(sensors, LOG_LEVEL_DBG);
 
 #define NO_HR 0
 #define NO_TEMP -99.0f
@@ -31,7 +31,7 @@ void heart_rate_sensor_init(void)
     int ret = max86140_init();
     if (ret == 0) {
         heart_rate_sensor_initialized = true;
-        LOG_INF("Heart rate sensor initialized successfully.");
+        LOG_DBG("Heart rate sensor initialized");
     } else {
         LOG_ERR("Heart rate sensor init failed: %d", ret);
     }
@@ -43,12 +43,12 @@ void temperature_sensor_init(temp_sensor_type_t sensor) {
         case BODY:
             ret = tmp117_init();
             if (ret == 0) temperature_sensors_initialized.body = true;
-            LOG_INF("Body temperature sensor initialized successfully.");
+            LOG_DBG("Body temperature sensor initialized");
             return;
         case AMBIENT:
             ret = sht3xdis_init();
             if (ret == 0) temperature_sensors_initialized.ambient = true;
-            LOG_INF("Ambient temperature sensor initialized successfully.");
+            LOG_DBG("Ambient temperature sensor initialized");
             return;
         default: 
             LOG_ERR("Invalid sensor type provided: %d", sensor);

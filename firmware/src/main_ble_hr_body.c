@@ -19,6 +19,7 @@
 #include <ble.h>
 #include <config.h>
 #include <max86140.h>
+#include <state_manager.h>
 #include <tmp117.h>
 
 #define AMBIENT_C_FIXED    24.5f
@@ -212,6 +213,9 @@ int main(void)
 	static float last_body_c = 25.0f;
 	static uint8_t hr_smooth;
 	uint32_t last_notify = 0U;
+	/* PSI baselines — align with main.c defaults; adjust after stable wear if desired */
+	static float base_skin_c = 34.0f;
+	static uint8_t base_hr_bpm = 72U;
 
 	for (;;) {
 #if DT_NODE_HAS_STATUS(BUTTON_NODE, okay)
@@ -235,6 +239,8 @@ int main(void)
 			hr_smooth = 0U;
 		}
 
+	// PSI baselines — use body temp and HR at stable wear time, or defaults if never calibrated.
+
 		float body_c = tmp117_read_temperature();
 
 		if (body_c <= BAD_TEMP_C + 1.0f) {
@@ -252,8 +258,15 @@ int main(void)
 
 			if (vitaband_health_notify_enabled()) {
 				uint8_t hr_send = (hr_smooth > 0U) ? hr_smooth : 1U;
+				uint8_t hr_for_psi =
+					(hr_smooth > 0U) ? hr_smooth : hr_send;
+				uint8_t risk = calculate_risk_score(last_body_c, base_skin_c, hr_for_psi,
+								    base_hr_bpm);
+				printk("ble-hr-body: notify HR=%u body=%.2f C risk=%u\n",
+				       (unsigned int)hr_send, (double)last_body_c, (unsigned int)risk);
 
-				err = vitaband_health_notify(hr_send, last_body_c, AMBIENT_C_FIXED, OK);
+				err = vitaband_health_notify(hr_send, last_body_c, AMBIENT_C_FIXED, OK,
+							   risk);
 				if (err != 0) {
 					printk("ble-hr-body: notify err %d\n", err);
 				}

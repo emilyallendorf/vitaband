@@ -76,7 +76,7 @@ config VITABAND_MAX86140_HR_PP_TRACE
 
 choice VITABAND_MAX86140_HR_PPG_MODE
 	prompt "PPG rate (IR channel timing for HR math)"
-	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST
+	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST || VITABAND_STATE_MACHINE_FIRMWARE
 	default VITABAND_MAX86140_HR_PPG_100_IRRED
 	help
 	  Datasheet: N=2 (IR+Red) is only defined up to ~100 sps. For ~200 or ~400 sps
@@ -96,7 +96,7 @@ endchoice
 
 config VITABAND_MAX86140_HR_WRIST_PROFILE
 	bool "MAX86140 HR: wrist-oriented tuning (stronger LED, stricter peaks)"
-	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST
+	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST || VITABAND_STATE_MACHINE_FIRMWARE
 	default n
 	help
 	  This board uses MAX86140 over SPI, not the Maxim MAX32664C hub + MAX86141 stack
@@ -150,6 +150,15 @@ config VITABAND_BLE_TEST
 	  synthetic values, isolated from sensor/haptics drivers.
 	  Use with prj_ble_test.conf.
 
+config VITABAND_STATE_MACHINE_FIRMWARE
+	bool
+	default y if (!VITABAND_BLINKY_BRINGUP && !VITABAND_PWM_I2C_PIN_SCOPE && !VITABAND_AMBIENT_PWM_DEMO && !VITABAND_SPARKFUN_TMP102_DK && !VITABAND_TMP117_I2C_DEMO && !VITABAND_MAX86140_HR_DEMO && !VITABAND_BLE_TEST && !VITABAND_BLE_BODY_TEMP_TEST && !VITABAND_BLE_HR_BODY_TEST)
+	default n
+	help
+	  Y when the default full application (src/main.c) is selected in CMake: state
+	  machine, sensors, optional BLE. Used so MAX86140 PPG / wrist Kconfig options
+	  apply to the production app, not only the HR demo or ble_hr_body test mains.
+
 config VITABAND_NO_BLE
 	bool "Application main without Bluetooth (state machine + sensors)"
 	depends on !VITABAND_BLINKY_BRINGUP
@@ -199,6 +208,14 @@ config VITABAND_BLE_HR_BODY_TEST
 	  Pick overlay for your board: app_ble_hr_body_dk.overlay (SPI3 + I2C0 TMP117) or
 	  app_ble_hr_body_vitaband.overlay (SPI0 MAX86140 + TWIM1 TMP117 on P0.26/P0.27 —
 	  TWIM0 cannot run with SPI0 on nRF52840). prj_ble_hr_body.conf selects 100 sps IR+Red PPG.
+
+config VITABAND_PSI_TRACE
+	bool "1 Hz RTT: NDJSON line with skin/base_skin/hr/base_hr/psi (verify risk inputs)"
+	depends on VITABAND_STATE_MACHINE_FIRMWARE
+	default n
+	help
+	  For field verification: prints one JSON line per state-machine tick (main.c) with
+	  the values passed to calculate_risk_score. Capture via Segger RTT.
 
 endmenu
 

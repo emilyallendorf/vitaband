@@ -19,6 +19,7 @@
 
 #include <config.h>
 #include <ble.h>
+#include <state_manager.h>
 #include <tmp117.h>
 
 #define HR_BPM_FIXED       72U
@@ -101,6 +102,7 @@ int main(void)
 	       (double)AMBIENT_C_FIXED);
 
 	static float last_body_c = 25.0f;
+	static float base_skin_c = 34.0f;
 
 	while (1) {
 		float body_c = tmp117_read_temperature();
@@ -114,7 +116,11 @@ int main(void)
 		}
 
 		if (vitaband_health_notify_enabled()) {
-			err = vitaband_health_notify(HR_BPM_FIXED, last_body_c, AMBIENT_C_FIXED, OK);
+			uint8_t risk = calculate_risk_score(last_body_c, base_skin_c, HR_BPM_FIXED,
+							      HR_BPM_FIXED);
+
+			err = vitaband_health_notify(HR_BPM_FIXED, last_body_c, AMBIENT_C_FIXED, OK,
+						     risk);
 			if (err != 0) {
 				printk("ble-body: notify err %d\n", err);
 			}

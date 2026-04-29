@@ -1,12 +1,23 @@
 #include "state_manager.h"
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 
 #include <stdlib.h>
 
 bool emergency_long_press = false;
 
 
-LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_DBG);
+
+#if IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+#undef LOG_DBG
+#undef LOG_WRN
+#undef LOG_ERR
+#define LOG_DBG(...) ((void)0)
+#define LOG_WRN(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+#endif
+
 #define BASE_CORE_TEMP_C   37.0f
 #define B_T                0.25f
 #define B_H                0.01f
@@ -19,25 +30,32 @@ static float clampf (float x, float lo, float hi)
 }
 
 void state_manager_init(void) {
-    LOG_INF("Initializing State Manager...");
-    
-    // Set the initial state
-    // In mock mode, we just start at OK. 
-    // In real mode, we might check sensors first.
-    handle_state_transition(OK, OK); 
-    
-    LOG_INF("State Manager Ready.");
+    LOG_DBG("Initializing state manager");
+
+    /* Set the initial state */
+    handle_state_transition(OK, OK);
+
+    LOG_DBG("State manager ready");
 }
 
 uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t heart_rate, uint8_t base_heart_rate) {
-    if (base_heart_rate == 0) return 0;
-    if (base_skin_temp <= 0.0f) return 0;
-    
-    //psi calculation logic
-    float st = skin_temp;
+    /*
+     * Effective baselines so BLE/app get a live PSI from current vitals instead of 0
+     * when baselines were never calibrated (common on bring-up).
+     */
     float st_0 = base_skin_temp;
-    float hr= (float) heart_rate;
-    float hr_0 = (float) base_heart_rate;
+    if (st_0 <= 0.0f) {
+        st_0 = (skin_temp > -50.0f) ? skin_temp : 34.0f;
+    }
+
+    uint8_t hr0_u = base_heart_rate;
+    if (hr0_u == 0U) {
+        hr0_u = (heart_rate > 0U) ? heart_rate : 72U;
+    }
+
+    float st = skin_temp;
+    float hr = (float)heart_rate;
+    float hr_0 = (float)hr0_u;
 
     //core temperature calculation
     float tc_0 = BASE_CORE_TEMP_C;
@@ -46,8 +64,10 @@ uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t hear
     //psi calculation
     float tc_denominator = 39.5f-tc_0;
     if (tc_denominator <= 0.1f) tc_denominator = 0.1f;
-    float hr_denominator = 180.0f-hr_0;
-    if (hr_denominator <= 1.0f) hr_denominator = 01.0f;
+    float hr_denominator = 180.0f - hr_0;
+    if (hr_denominator <= 1.0f) {
+        hr_denominator = 1.0f;
+    }
 
     float psi = 5.0f * ((tc - tc_0) / tc_denominator)
                 + 5.0f * (( hr - hr_0) / hr_denominator);
@@ -66,7 +86,7 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
     int64_t now = k_uptime_get();
     vitaband_state_t next_state = curr_state;
     if (curr_state!=EMERGENCY && button_status==PRESSED){
-        LOG_INF("State change: %d -> %d (emergency button pressed)", curr_state, EMERGENCY);
+        LOG_DBG("State change: %d -> %d (emergency button)", curr_state, EMERGENCY);
         ge3_start_ms  = -1;
         ge7_start_ms  = -1;
         le65_start_ms = -1;
@@ -77,7 +97,7 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
     {
         if (button_status==LONG_PRESS)
         {
-            LOG_INF("State change: %d -> %d (emergency button long-pressed)",
+            LOG_DBG("State change: %d -> %d (emergency long-press)",
             EMERGENCY, WARNING);
             ge3_start_ms  = -1;
             ge7_start_ms  = -1;
@@ -140,19 +160,19 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
         }
         break;
     default:
-        next_state=OK;
+        next_state = OK;
         break;
-        
+    }
+
     if (next_state != curr_state) {
-        LOG_INF("State change: %d -> %d, psi=%.2f",
+        LOG_DBG("State change: %d -> %d, psi=%.2f",
                 curr_state, next_state, (double)psi);
-        ge3_start_ms  = -1;
-        ge7_start_ms  = -1;
+        ge3_start_ms = -1;
+        ge7_start_ms = -1;
         le65_start_ms = -1;
         le25_start_ms = -1;
-        }
-    
     }
+
     return next_state;
 }
 
@@ -173,12 +193,12 @@ void handle_state_transition(vitaband_state_t old_state, vitaband_state_t new_st
         return; // Safety check: do nothing if the state didn't actually change
     }
 
-    LOG_INF("--- Transitioning: %d -> %d ---", old_state, new_state);
+    LOG_DBG("Transitioning: %d -> %d", old_state, new_state);
 
     /* 1. Perform one-shot actions based on the NEW state */
     switch (new_state) {
         case OK:
-            LOG_INF("Action: System stabilized. Clearing alerts.");
+            LOG_DBG("Action: system stabilized, clearing alerts");
             // haptics_stop_all(); // Example: Stop any warning vibrations
             break;
 

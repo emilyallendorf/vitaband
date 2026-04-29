@@ -47,12 +47,14 @@ elseif(CONFIG_VITABAND_BLE_BODY_TEMP_TEST)
   message(STATUS "VitaBand: main = src/main_ble_body_temp.c (BLE + TMP117 body temp)")
   target_sources(app PRIVATE
     src/main_ble_body_temp.c
+    src/state_manager.c
     drivers/src/tmp117.c
   )
 elseif(CONFIG_VITABAND_BLE_HR_BODY_TEST)
   message(STATUS "VitaBand: main = src/main_ble_hr_body.c (BLE + MAX86140 HR + TMP117)")
   target_sources(app PRIVATE
     src/main_ble_hr_body.c
+    src/state_manager.c
     drivers/src/max86140.c
     drivers/src/tmp117.c
   )

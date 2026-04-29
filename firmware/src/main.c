@@ -287,6 +287,13 @@ static uint8_t base_heart_rate = 72;
 static vitaband_state_t g_curr_state     = OK;
 static bool             g_prev_mock_feed;
 
+/* MAX86140 FIFO needs frequent draining (~220 ms); state machine + BLE stay at 1 Hz */
+#define HR_POLL_MS          220
+#define STATE_MACHINE_MS    1000
+
+static uint8_t          g_latest_hr_bpm;
+static button_status_t  g_latest_btn;
+
 vitaband_state_t vitaband_current_state(void)
 {
 	return g_curr_state;
@@ -420,6 +427,8 @@ int main(void)
 #endif
 	printk("Type 'help' in the terminal to see commands.\n");
 
+	int64_t next_state_tick_ms = k_uptime_get();
+
 	for (;;) {
 		int64_t tick_start = k_uptime_get();
 
@@ -437,49 +446,15 @@ int main(void)
 		}
 		g_prev_mock_feed = mock_on;
 
-		float skin_temp;
-		uint8_t heart_rate;
-		button_status_t btn;
-
 		if (mock_on) {
-			skin_temp    = mock_read_temperature();
-			heart_rate   = mock_read_heart_rate();
-			btn          = mock_read_button_status();
+			g_latest_hr_bpm = mock_read_heart_rate();
+			g_latest_btn = mock_read_button_status();
 		} else {
-			skin_temp    = read_temperature(BODY);
-			heart_rate   = read_heart_rate();
-			btn          = poll_button();
+			g_latest_hr_bpm = read_heart_rate();
+			g_latest_btn = poll_button();
 		}
-
-		float   ambient_temp = read_temperature(AMBIENT);
-		float   humidity     = read_humidity();
-
-		uint8_t psi_int =
-			calculate_risk_score(skin_temp, base_skin_temp, heart_rate, base_heart_rate);
-
-		vitaband_state_t next_state = determine_state(g_curr_state, (float)psi_int, btn);
-		if (next_state != g_curr_state) {
-			/* printk: always visible on UART; LOG_* can be filtered by runtime level */
-			printk("\n*** STATE TRANSITION: %s -> %s | psi=%u | btn=%d ***\n",
-			       vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
-			       psi_int, (int)btn);
-			LOG_WRN("State transition: %s -> %s | psi=%u btn=%d",
-				vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
-				psi_int, (int)btn);
-			handle_state_transition(g_curr_state, next_state);
-			g_curr_state = next_state;
-		}
-
-		LOG_DBG("skin=%.2f amb=%.2f hum=%.0f%% hr=%u psi=%u state=%s btn=%d mock=%d",
-			(double)skin_temp, (double)ambient_temp, (double)humidity,
-			heart_rate, psi_int, vitaband_state_name(g_curr_state), (int)btn,
-			mock_on ? 1 : 0);
 
 #if IS_ENABLED(CONFIG_BT)
-		if (vitaband_health_notify_enabled()) {
-			(void)vitaband_health_notify(heart_rate, skin_temp, ambient_temp, g_curr_state);
-		}
-
 		if (atomic_test_and_clear_bit(ble_state, STATE_CONNECTED)) {
 #if defined(HAS_LED)
 			blink_stop();
@@ -507,8 +482,73 @@ int main(void)
 		}
 #endif /* CONFIG_BT */
 
+		int64_t now = k_uptime_get();
+		if (now >= next_state_tick_ms) {
+			next_state_tick_ms = now + STATE_MACHINE_MS;
+
+			/*
+			 * Snapshot vitals in one tick for PSI: same-cycle body temp + HR
+			 * (not a stale g_latest_hr from an earlier 220 ms poll).
+			 */
+			float        skin_temp;
+			uint8_t      heart_rate;
+
+			if (mock_on) {
+				skin_temp = mock_read_temperature();
+				heart_rate = mock_read_heart_rate();
+			} else {
+				skin_temp = read_temperature(BODY);
+				heart_rate = read_heart_rate();
+			}
+
+			g_latest_hr_bpm = heart_rate;
+
+			float ambient_temp = read_temperature(AMBIENT);
+			float humidity     = read_humidity();
+
+			uint8_t psi_int = calculate_risk_score(skin_temp, base_skin_temp, heart_rate,
+							       base_heart_rate);
+
+#if IS_ENABLED(CONFIG_VITABAND_PSI_TRACE)
+			/* #region agent log */
+			printk("{\"sessionId\":\"75362d\",\"hypothesisId\":\"H_psi\",\"location\":\"main.c:state_tick\","
+			       "\"message\":\"psi_inputs\",\"data\":{\"skin\":%.3f,\"base_skin\":%.3f,\"hr\":%u,"
+			       "\"base_hr\":%u,\"psi\":%u,\"mock\":%u},\"timestamp\":%u}\n",
+			       (double)skin_temp, (double)base_skin_temp, (unsigned int)heart_rate,
+			       (unsigned int)base_heart_rate, (unsigned int)psi_int, mock_on ? 1U : 0U,
+			       (unsigned int)k_uptime_get_32());
+			/* #endregion */
+#endif
+
+			vitaband_state_t next_state =
+				determine_state(g_curr_state, (float)psi_int, g_latest_btn);
+			if (next_state != g_curr_state) {
+				printk("\n*** STATE TRANSITION: %s -> %s | psi=%u | btn=%d ***\n",
+				       vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
+				       psi_int, (int)g_latest_btn);
+				LOG_WRN("State transition: %s -> %s | psi=%u btn=%d",
+					vitaband_state_name(g_curr_state), vitaband_state_name(next_state),
+					psi_int, (int)g_latest_btn);
+				handle_state_transition(g_curr_state, next_state);
+				g_curr_state = next_state;
+			}
+
+			/* INF so readings appear with default module level (DBG was silent). */
+			LOG_INF("vitals: skin=%.2f C amb=%.2f C hum=%.0f%% HR=%u PSI=%u state=%s btn=%d mock=%d",
+				(double)skin_temp, (double)ambient_temp, (double)humidity,
+				heart_rate, psi_int, vitaband_state_name(g_curr_state),
+				(int)g_latest_btn, mock_on ? 1 : 0);
+
+#if IS_ENABLED(CONFIG_BT)
+			if (vitaband_health_notify_enabled()) {
+				(void)vitaband_health_notify(heart_rate, skin_temp, ambient_temp,
+							     g_curr_state, psi_int);
+			}
+#endif
+		}
+
 		int64_t elapsed  = k_uptime_get() - tick_start;
-		int32_t sleep_ms = (int32_t)(1000 - elapsed);
+		int32_t sleep_ms = (int32_t)(HR_POLL_MS - elapsed);
 		if (sleep_ms > 0) {
 			k_msleep(sleep_ms);
 		}

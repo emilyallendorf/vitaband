@@ -31,21 +31,22 @@
 #define VITABAND_HEALTH_STATE_CRITICAL  2U
 #define VITABAND_HEALTH_STATE_EMERGENCY   3U
 
-#define VITABAND_HEALTH_NOTIFY_PAYLOAD_LEN 14U
+#define VITABAND_HEALTH_NOTIFY_PAYLOAD_LEN 15U
 
 /*
- * Notification payload (14 octets, little-endian):
+ * Notification payload (15 octets, little-endian):
  *   offset 0:       uint8  heart rate (bpm)
  *   offset 1..4:    float  body (skin) temperature (°C)
  *   offset 5..8:    float  ambient temperature (°C)
  *   offset 9:       uint8  state (0=OK, 1=WARNING, 2=CRITICAL, 3=EMERGENCY)
  *   offset 10..13:  uint32 uptime since boot (ms)
+ *   offset 14:      uint8  risk score PSI 0..10 from calculate_risk_score (0 if unknown)
  */
 
 bool vitaband_health_notify_enabled(void);
 
 /** @brief Notify subscribed centrals; no-op if CCC notify not enabled. */
 int vitaband_health_notify(uint8_t hr_bpm, float body_temp_c, float ambient_temp_c,
-			   vitaband_state_t state);
+			   vitaband_state_t state, uint8_t risk_score);
 
 #endif /* BLE_H */

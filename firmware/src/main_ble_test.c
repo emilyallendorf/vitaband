@@ -98,7 +98,7 @@ int main(void)
 		       (unsigned int)k_uptime_get_32());
 		/* #endregion */
 		if (vitaband_health_notify_enabled()) {
-			int nerr = vitaband_health_notify(hr, body_c, amb_c, state);
+			int nerr = vitaband_health_notify(hr, body_c, amb_c, state, 0U);
 			/* #region agent log */
 			printk("{\"sessionId\":\"75362d\",\"runId\":\"rtt-missing\",\"hypothesisId\":\"H_notify\",\"location\":\"main_ble_test:loop\",\"message\":\"notify_return\",\"data\":{\"value\":%d},\"timestamp\":%u}\n",
 			       nerr, (unsigned int)k_uptime_get_32());
