@@ -323,8 +323,8 @@ static const char *vitaband_state_name(vitaband_state_t s)
 	}
 }
 
-static float   base_skin_temp  = 34.0f;
-static uint8_t base_heart_rate = 72;
+//static float   base_skin_temp  = 34.0f;
+//static uint8_t base_heart_rate = 72;
 
 static vitaband_state_t g_curr_state     = OK;
 static bool             g_prev_mock_feed;
@@ -414,8 +414,7 @@ int main(void)
 		last_body_c    = first_skin;
 		LOG_INF("Baseline skin temp: %.2f C", (double)base_skin_temp);
 	} else {
-		LOG_WRN("TMP117 not ready — using %.1f C fallback",
-			(double)base_skin_temp);
+		LOG_WRN("TMP117 not ready — using fallback baseline 34.0 C");
 	}
 
 	calibrate_temperature_sensor(BODY);
@@ -426,7 +425,7 @@ int main(void)
 			     is_temp_sensor_ready(AMBIENT);
 	if (!sensors_ready) {
 		LOG_WRN("Sensors not ready or need calibration (baseline skin %.1f C)",
-			(double)base_skin_temp);
+			34.0);
 	}
 
 #if IS_ENABLED(CONFIG_BT)

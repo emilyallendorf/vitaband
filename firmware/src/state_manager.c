@@ -29,6 +29,9 @@ LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_DBG);
 #define B_T                0.25f
 #define B_H                0.01f
 
+static float baseline_skin_temp_c = 34.0f;
+static uint8_t baseline_heart_rate_bpm = 72;
+
 static float clampf (float x, float lo, float hi)
 {
     if (x<lo) return lo;
@@ -43,6 +46,15 @@ void state_manager_init(void) {
     handle_state_transition(OK, OK);
 
     LOG_DBG("State manager ready");
+}
+void state_manager_set_baseline(float base_skin_temp, uint8_t base_heart_rate)
+{
+    baseline_skin_temp_c = base_skin_temp;
+    baseline_heart_rate_bpm = base_heart_rate;
+
+    LOG_INF("Calibration baseline updated: skin=%.2f C, HR=%u",
+            (double)baseline_skin_temp_c,
+            baseline_heart_rate_bpm);
 }
 
 uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t heart_rate, uint8_t base_heart_rate) {
@@ -82,13 +94,24 @@ uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t hear
     // LOG_INF ("skin=%.2f base_skin=%.2f hr=%u base_hr=%u tc=%.2f psi=%.2f", (double)st, (double)st_0, heart_rate, base_heart_rate, (double)tc, (double)psi);
     return (uint8_t) (psi + 0.5f);
 }
-
+uint8_t state_manager_calculate_risk_score(float skin_temp, uint8_t heart_rate)
+{
+    return calculate_risk_score(
+        skin_temp,
+        baseline_skin_temp_c,
+        heart_rate,
+        baseline_heart_rate_bpm
+    );
+}
 // vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, bool emergency_button_pressed, bool emergency_button_long) {
-vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_status_t button_status) {
-    static int64_t ge3_start_ms  = -1;   // PSI >= 3.0
-    static int64_t ge7_start_ms  = -1;   // PSI >= 7.0
-    static int64_t le65_start_ms = -1;   // PSI <= 6.5
-    static int64_t le25_start_ms = -1;   // PSI <= 2.5
+vitaband_state_t determine_state(vitaband_state_t curr_state,
+                                 float psi,
+                                 button_status_t button_status)
+{
+    static int64_t ge3_start_ms  = -1;
+    static int64_t ge7_start_ms  = -1;
+    static int64_t le65_start_ms = -1;
+    static int64_t le25_start_ms = -1;
 
     int64_t now = k_uptime_get();
     vitaband_state_t next_state = curr_state;
@@ -114,33 +137,27 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
         }
         return EMERGENCY;
     }
+
     if (psi >= 3.0f) {
-        if (ge3_start_ms < 0) {
-            ge3_start_ms = now;
-        }
+        if (ge3_start_ms < 0) ge3_start_ms = now;
     } else {
         ge3_start_ms = -1;
     }
 
     if (psi >= 7.0f) {
-        if (ge7_start_ms < 0) {
-            ge7_start_ms = now;
-        }
+        if (ge7_start_ms < 0) ge7_start_ms = now;
     } else {
         ge7_start_ms = -1;
     }
 
     if (psi <= 6.5f) {
-        if (le65_start_ms < 0) {
-            le65_start_ms = now;
-        }
+        if (le65_start_ms < 0) le65_start_ms = now;
     } else {
         le65_start_ms = -1;
     }
+
     if (psi <= 2.5f) {
-        if (le25_start_ms < 0) {
-            le25_start_ms = now;
-        }
+        if (le25_start_ms < 0) le25_start_ms = now;
     } else {
         le25_start_ms = -1;
     }
@@ -166,6 +183,7 @@ vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_
             next_state = WARNING;
         }
         break;
+
     default:
         next_state = OK;
         break;

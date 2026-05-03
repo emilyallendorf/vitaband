@@ -44,7 +44,7 @@ uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t hr,
  */
 vitaband_state_t determine_state(vitaband_state_t curr_state, float psi, button_status_t status);
 
-/** Current vitals state driven by `main.c` (single source of truth for shell stats). */
-vitaband_state_t vitaband_current_state(void);
+void state_manager_set_baseline(float base_skin_temp, uint8_t base_heart_rate);
 
+uint8_t state_manager_calculate_risk_score(float skin_temp, uint8_t heart_rate);
 #endif
