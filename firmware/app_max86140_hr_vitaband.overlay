@@ -1,0 +1,85 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+
+/ {
+    chosen {
+        /delete-property/ zephyr,console;
+        /delete-property/ zephyr,shell-uart;
+        /delete-property/ zephyr,uart-mcumgr;
+        /delete-property/ zephyr,bt-mon-uart;
+        /delete-property/ zephyr,bt-c2h-uart;
+    };
+
+    leds {
+        status = "disabled";
+        led0: led_0 { status = "disabled"; gpios = <&gpio0 2 GPIO_ACTIVE_LOW>; };
+        led1: led_1 { status = "disabled"; gpios = <&gpio0 3 GPIO_ACTIVE_LOW>; };
+        led2: led_2 { status = "disabled"; gpios = <&gpio0 4 GPIO_ACTIVE_LOW>; };
+        led3: led_3 { status = "disabled"; gpios = <&gpio0 7 GPIO_ACTIVE_LOW>; };
+    };
+
+    pwmleds {
+        status = "disabled";
+        pwm_led0: pwm_led_0 { status = "disabled"; };
+    };
+};
+
+&uart0 { status = "disabled"; };
+&adc   { status = "disabled"; };
+&pwm0  { status = "disabled"; };
+
+/* TWIM0 and SPIM0 share 0x40003000 — only one may be enabled. */
+&i2c0 { status = "disabled"; };
+
+&pinctrl {
+    /* Remove pwm0 pinctrl — it claims P0.13 (MISO) even when pwm0 is disabled */
+    // /delete-node/ pwm0_default;
+    // /delete-node/ pwm0_sleep;
+
+    spi0_max86140_vb: spi0_max86140_vb {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 15)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 16)>;
+            nordic,drive-mode = <NRF_DRIVE_H0H1>;
+        };
+        group2 {
+            psels = <NRF_PSEL(SPIM_MISO, 0, 13)>;
+            // bias-pull-up;
+        };
+    };
+
+    spi0_max86140_vb_sleep: spi0_max86140_vb_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 15)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 16)>;
+            low-power-enable;
+        };
+        group2 {
+            psels = <NRF_PSEL(SPIM_MISO, 0, 13)>;
+            low-power-enable;
+            // bias-pull-up;
+        };
+    };
+};
+
+&spi0 {
+    compatible = "nordic,nrf-spim";
+    status = "okay";
+    pinctrl-0 = <&spi0_max86140_vb>;
+    pinctrl-1 = <&spi0_max86140_vb_sleep>;
+    pinctrl-names = "default", "sleep";
+    cs-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+	// cs-gpios2 = <&gpio0 13 GPIO_ACTIVE_LOW>;
+
+    max86140: maxim_max86140@0 {
+        compatible = "maxim,max86140";
+        reg = <0>;
+        spi-max-frequency = <1000000>;
+        frame-format = <SPI_FRAME_FORMAT_MOTOROLA>;
+    };
+};
+
+&spi1 { status = "disabled"; };
+&spi2 { status = "disabled"; };
+&spi3 { status = "disabled"; };

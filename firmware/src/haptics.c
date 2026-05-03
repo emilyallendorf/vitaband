@@ -7,6 +7,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/pwm.h>
 #include <zephyr/logging/log.h>
 #include "haptics.h"
 
@@ -16,7 +17,7 @@
 #define HAPTICS_HAS_LED 0
 #endif
 
-LOG_MODULE_REGISTER(haptics, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(haptics, LOG_LEVEL_DBG);
 
 /* ========================================================================== */
 /* HARDWARE SPECIFICATIONS                                                    */
@@ -40,7 +41,7 @@ LOG_MODULE_REGISTER(haptics, LOG_LEVEL_INF);
  */
 
 /* ========================================================================== */
-/* GPIO CONFIGURATION                                                         */
+/* GPIO / PWM CONFIGURATION (see app.overlay aliases)                         */
 /* ========================================================================== */
 
 #if HAPTICS_HAS_LED
@@ -48,10 +49,10 @@ static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 #endif
 
 /* MOTOR_EN — GPIO; intensity maps to on/off only */
-static const struct gpio_dt_spec vibration = GPIO_DT_SPEC_GET(DT_ALIAS(vibration_motor), gpios);
+static const struct gpio_dt_spec vibration = GPIO_DT_SPEC_GET(DT_ALIAS(motor_en), gpios);
 
-/* BUZZER_EN — GPIO; frequency arg ignored */
-static const struct gpio_dt_spec buzzer = GPIO_DT_SPEC_GET(DT_ALIAS(buzzer), gpios);
+/* BUZZER_EN — pwm0 channel 0 on P0.05; frequency from pwm_set_dt */
+static const struct pwm_dt_spec buzzer = PWM_DT_SPEC_GET(DT_ALIAS(buzzer));
 
 /* ========================================================================== */
 /* ALERT PATTERNS                                                             */
@@ -266,17 +267,37 @@ static struct k_work_delayable buzzer_stop_work;
 
 static void buzzer_stop_handler(struct k_work *work)
 {
-	(void)gpio_pin_set_dt(&buzzer, 0);
+	(void)pwm_set_pulse_dt(&buzzer, 0U);
 	LOG_DBG("Buzzer stopped");
 }
 
 static void buzzer_set_tone(uint16_t frequency_hz)
 {
-	if (frequency_hz == 0) {
-		(void)gpio_pin_set_dt(&buzzer, 0);
+	int ret;
+
+	if (frequency_hz == 0U) {
+		ret = pwm_set_pulse_dt(&buzzer, 0U);
+		if (ret != 0) {
+			LOG_DBG("buzzer pwm off: %d", ret);
+		}
 		return;
 	}
-	(void)gpio_pin_set_dt(&buzzer, 1);
+
+	/* Practical range for piezo; keeps period_ns in range for the driver */
+	if (frequency_hz < 50U) {
+		frequency_hz = 50U;
+	}
+	if (frequency_hz > 10000U) {
+		frequency_hz = 10000U;
+	}
+
+	uint32_t period_ns = (uint32_t)(1000000000ULL / (uint64_t)frequency_hz);
+	uint32_t pulse_ns = period_ns / 2U;
+
+	ret = pwm_set_dt(&buzzer, period_ns, pulse_ns);
+	if (ret != 0) {
+		LOG_WRN("pwm_set_dt failed: %d (hz=%u)", ret, frequency_hz);
+	}
 }
 
 static void buzzer_start(uint16_t frequency_hz, uint16_t duration_ms)
@@ -308,7 +329,7 @@ int haptics_init(void)
 {
     int ret;
     
-	LOG_INF("Initializing haptics system");
+	LOG_DBG("Initializing haptics system");
 
 #if HAPTICS_HAS_LED
 	if (!gpio_is_ready_dt(&led)) {
@@ -333,14 +354,13 @@ int haptics_init(void)
 		return ret;
 	}
     
-    /* Buzzer enable GPIO */
-    if (!gpio_is_ready_dt(&buzzer)) {
-        LOG_ERR("Buzzer GPIO not ready");
+    if (!pwm_is_ready_dt(&buzzer)) {
+        LOG_ERR("Buzzer PWM not ready");
         return -ENODEV;
     }
-    ret = gpio_pin_configure_dt(&buzzer, GPIO_OUTPUT_INACTIVE);
+    ret = pwm_set_pulse_dt(&buzzer, 0U);
     if (ret != 0) {
-        LOG_ERR("Buzzer GPIO configure failed: %d", ret);
+        LOG_ERR("Buzzer PWM initial off failed: %d", ret);
         return ret;
     }
     
@@ -357,7 +377,7 @@ int haptics_init(void)
     /* Turn everything off initially */
     haptics_stop_all();
     
-    LOG_INF("Haptics initialized");
+    LOG_DBG("Haptics initialized");
     return 0;
 }
 
@@ -373,7 +393,7 @@ void haptics_set_pattern(device_state_t state, const haptic_pattern_t *pattern)
     }
     
     memcpy(&user_patterns[state], pattern, sizeof(haptic_pattern_t));
-    LOG_INF("Updated pattern for state %d", state);
+    LOG_DBG("Updated pattern for state %d", state);
 }
 
 void haptics_get_pattern(device_state_t state, haptic_pattern_t *pattern)
@@ -389,7 +409,7 @@ void haptics_get_pattern(device_state_t state, haptic_pattern_t *pattern)
 void haptics_reset_to_defaults(void)
 {
     memcpy(user_patterns, default_patterns, sizeof(default_patterns));
-    LOG_INF("Reset all patterns to defaults");
+    LOG_DBG("Reset all patterns to defaults");
 }
 
 /* ========================================================================== */
@@ -405,7 +425,7 @@ void haptics_trigger_alert(device_state_t state)
     
     haptic_pattern_t *pattern = &user_patterns[state];
     
-    LOG_INF("Triggering alert for state %d", state);
+    LOG_DBG("Triggering alert for state %d", state);
     
     /* LED */
     if (pattern->led_enabled) {
@@ -453,6 +473,11 @@ void haptics_vibration_pulse(uint8_t intensity, uint16_t duration_ms)
 void haptics_buzzer_beep(uint16_t frequency_hz, uint16_t duration_ms)
 {
     buzzer_start(frequency_hz, duration_ms);
+}
+
+void haptics_buzzer_stop(void)
+{
+	buzzer_stop();
 }
 
 void haptics_stop_all(void)
@@ -528,34 +553,34 @@ void haptics_pattern_from_bytes(haptic_pattern_t *pattern, const uint8_t *buffer
 
 void haptics_test_all(void)
 {
-    LOG_INF("=== Haptics Test Sequence ===");
+    LOG_DBG("=== Haptics Test Sequence ===");
     
     /* Test LED */
-    LOG_INF("Testing LED...");
+    LOG_DBG("Testing LED...");
     haptics_led_set(true);
     k_msleep(500);
     haptics_led_set(false);
     k_msleep(500);
     
     /* Test vibration */
-    LOG_INF("Testing vibration motor...");
+    LOG_DBG("Testing vibration motor...");
     haptics_vibration_pulse(100, 500);
     k_msleep(1000);
     
     /* Test buzzer at different frequencies */
-    LOG_INF("Testing buzzer - 1 kHz");
+    LOG_DBG("Testing buzzer - 1 kHz");
     haptics_buzzer_beep(1000, 300);
     k_msleep(500);
     
-    LOG_INF("Testing buzzer - 2 kHz");
+    LOG_DBG("Testing buzzer - 2 kHz");
     haptics_buzzer_beep(2000, 300);
     k_msleep(500);
     
-    LOG_INF("Testing buzzer - 4 kHz (resonant)");
+    LOG_DBG("Testing buzzer - 4 kHz (resonant)");
     haptics_buzzer_beep(4000, 300);
     k_msleep(500);
     
-    LOG_INF("Haptics test complete");
+    LOG_DBG("Haptics test complete");
 }
 
 void haptics_print_pattern(device_state_t state)
@@ -566,16 +591,16 @@ void haptics_print_pattern(device_state_t state)
     
     haptic_pattern_t *p = &user_patterns[state];
     
-    LOG_INF("=== Pattern for state %d ===", state);
-    LOG_INF("LED: %s, Pattern: %d, Duration: %u ms",
+    LOG_DBG("=== Pattern for state %d ===", state);
+    LOG_DBG("LED: %s, Pattern: %d, Duration: %u ms",
             p->led_enabled ? "ON" : "OFF",
             p->led_pattern,
             p->led_duration_ms);
-    LOG_INF("Vibration: %s, Intensity: %u%%, Duration: %u ms",
+    LOG_DBG("Vibration: %s, Intensity: %u%%, Duration: %u ms",
             p->vibration_enabled ? "ON" : "OFF",
             p->vibration_intensity,
             p->vibration_duration_ms);
-    LOG_INF("Buzzer: %s, Frequency: %u Hz, Duration: %u ms",
+    LOG_DBG("Buzzer: %s, Frequency: %u Hz, Duration: %u ms",
             p->buzzer_enabled ? "ON" : "OFF",
             p->buzzer_frequency_hz,
             p->buzzer_duration_ms);

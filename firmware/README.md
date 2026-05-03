@@ -23,7 +23,13 @@
 │   └── src/        # I2C driver implementations
 ├── inc/            # Application headers (BLE, Power, Sensors)
 ├── src/            # Main logic & State Machine
-├── app.overlay     # Devicetree hardware definitions
-├── prj.conf        # Kconfig project configuration
-└── CMakeLists.txt  # Build system configuration
+├── app_vitaband_base.overlay (full app: SPI0 MAX86140 + TMP117 + SHT3x on TWIM1)
+├── app_bringup_min.overlay / app_ambient_pwm.overlay (+ optional *_i2c_dkswap)
+├── app_sparkfun_tmp102_dk*.overlay / prj_sparkfun_tmp102_dk*.conf (TMP102)
+├── app_tmp117_i2c*.overlay / prj_tmp117_i2c.conf (TMP117)
+├── prj.conf, prj_bringup.conf, prj_ambient_pwm.conf, …
+└── CMakeLists.txt
+```
+
+Bring-up and ambient images do **not** use a shared root `app.overlay`: pass the matching file with `-DDTC_OVERLAY_FILE=…` (see the header comments in each `prj_*.conf`) so overlays never merge unexpectedly.
 

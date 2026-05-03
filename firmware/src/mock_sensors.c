@@ -10,7 +10,7 @@
 #include "mock_sensors.h"
 #include <math.h>
 
-LOG_MODULE_REGISTER(mock_sensors, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(mock_sensors, LOG_LEVEL_DBG);
 #ifndef CLAMP
 #define CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
 #endif
@@ -42,8 +42,8 @@ static size_t scenario_step = 0;
 
 void mock_sensors_init(void)
 {
-    LOG_INF("Mock sensors initialized");
-    LOG_INF("Mode: STATIC, HR: %u BPM, Temp: %.1f°C, Battery: %u mV",
+    LOG_DBG("Mock sensors initialized");
+    LOG_DBG("Mode: STATIC, HR: %u BPM, Temp: %.1f°C, Battery: %u mV",
             config.heart_rate, config.temperature, config.battery_voltage);
 }
 
@@ -54,37 +54,37 @@ void mock_sensors_init(void)
 void mock_sensors_set_mode(mock_mode_t mode)
 {
     config.mode = mode;
-    LOG_INF("Mock mode set to: %d", mode);
+    LOG_DBG("Mock mode set to: %d", mode);
 }
 
 void mock_sensors_set_heart_rate(uint8_t hr)
 {
     config.heart_rate = hr;
-    LOG_INF("Mock HR set to: %u BPM", hr);
+    LOG_DBG("Mock HR set to: %u BPM", hr);
 }
 
 void mock_sensors_set_temperature(float temp)
 {
     config.temperature = temp;
-    LOG_INF("Mock temp set to: %.1f°C", temp);
+    LOG_DBG("Mock temp set to: %.1f°C", temp);
 }
 
 void mock_sensors_set_button_status(button_status_t status){
     config.button_status = status;
-    LOG_INF("Button status set");
+    LOG_DBG("Button status set");
 }
 
 void mock_sensors_set_battery(uint16_t voltage_mv)
 {
     config.battery_voltage = voltage_mv;
-    LOG_INF("Mock battery set to: %u mV", voltage_mv);
+    LOG_DBG("Mock battery set to: %u mV", voltage_mv);
 }
 
 void mock_sensors_enable_noise(bool enable, uint8_t amplitude)
 {
     config.noise_enabled = enable;
     config.noise_amplitude = amplitude;
-    LOG_INF("Noise %s (amplitude: %u)", enable ? "enabled" : "disabled", amplitude);
+    LOG_DBG("Noise %s (amplitude: %u)", enable ? "enabled" : "disabled", amplitude);
 }
 
 /* ========================================================================== */
@@ -337,8 +337,8 @@ void mock_sensors_start_scenario(mock_scenario_t scenario)
     config.temperature = step->temperature;
     config.battery_voltage = step->battery_mv;
     
-    LOG_INF("=== Starting Scenario: %d ===", scenario);
-    LOG_INF("Step 0: %s", step->description);
+    LOG_DBG("=== Starting Scenario: %d ===", scenario);
+    LOG_DBG("Step 0: %s", step->description);
 }
 
 void mock_sensors_stop_scenario(void)
@@ -346,7 +346,12 @@ void mock_sensors_stop_scenario(void)
     scenario_active = false;
     current_scenario = SCENARIO_NONE;
     config.mode = MOCK_MODE_STATIC;
-    LOG_INF("Scenario stopped");
+    LOG_DBG("Scenario stopped");
+}
+
+bool mock_sensors_scenario_active(void)
+{
+	return scenario_active;
 }
 
 void mock_sensors_update_scenario(void)
@@ -370,7 +375,7 @@ void mock_sensors_update_scenario(void)
         
         /* Check for end of scenario */
         if (next_step->duration_ms == 0) {
-            LOG_INF("=== Scenario Complete ===");
+            LOG_DBG("=== Scenario Complete ===");
             mock_sensors_stop_scenario();
             return;
         }
@@ -380,7 +385,7 @@ void mock_sensors_update_scenario(void)
         config.temperature = next_step->temperature;
         config.battery_voltage = next_step->battery_mv;
         
-        LOG_INF("Step %zu: %s (HR=%u, Temp=%.1f, Batt=%u)",
+        LOG_DBG("Step %zu: %s (HR=%u, Temp=%.1f, Batt=%u)",
                 scenario_step,
                 next_step->description,
                 next_step->heart_rate,
@@ -395,17 +400,17 @@ void mock_sensors_update_scenario(void)
 
 void mock_sensors_print_status(void)
 {
-    LOG_INF("=== Mock Sensor Status ===");
-    LOG_INF("Mode: %d", config.mode);
-    LOG_INF("HR: %u BPM", config.heart_rate);
-    LOG_INF("Temp: %.1f°C", config.temperature);
-    LOG_INF("Battery: %u mV", config.battery_voltage);
-    LOG_INF("Noise: %s (amplitude: %u)",
+    LOG_DBG("=== Mock Sensor Status ===");
+    LOG_DBG("Mode: %d", config.mode);
+    LOG_DBG("HR: %u BPM", config.heart_rate);
+    LOG_DBG("Temp: %.1f°C", config.temperature);
+    LOG_DBG("Battery: %u mV", config.battery_voltage);
+    LOG_DBG("Noise: %s (amplitude: %u)",
             config.noise_enabled ? "ON" : "OFF",
             config.noise_amplitude);
     
     if (scenario_active) {
-        LOG_INF("Active scenario: %d, step: %zu", current_scenario, scenario_step);
+        LOG_DBG("Active scenario: %d, step: %zu", current_scenario, scenario_step);
     }
 }
 

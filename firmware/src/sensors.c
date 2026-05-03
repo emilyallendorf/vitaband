@@ -31,9 +31,9 @@ void heart_rate_sensor_init(void)
     int ret = max86140_init();
     if (ret == 0) {
         heart_rate_sensor_initialized = true;
-        LOG_INF("Heart rate sensor initialized successfully.");
+        LOG_INF("MAX86140 (HR) OK");
     } else {
-        LOG_ERR("Heart rate sensor init failed: %d", ret);
+        LOG_ERR("MAX86140 (HR) init failed: %d — HR will read 0", ret);
     }
 }
 
@@ -42,17 +42,24 @@ void temperature_sensor_init(temp_sensor_type_t sensor) {
     switch(sensor) {
         case BODY:
             ret = tmp117_init();
-            if (ret == 0) temperature_sensors_initialized.body = true;
-            LOG_INF("Body temperature sensor initialized successfully.");
+            if (ret == 0) {
+                temperature_sensors_initialized.body = true;
+                LOG_INF("TMP117 (body) OK");
+            } else {
+                LOG_ERR("TMP117 (body) init failed: %d — reads will be invalid", ret);
+            }
             return;
         case AMBIENT:
             ret = sht3xdis_init();
-            if (ret == 0) temperature_sensors_initialized.ambient = true;
-            LOG_INF("Ambient temperature sensor initialized successfully.");
+            if (ret == 0) {
+                temperature_sensors_initialized.ambient = true;
+                LOG_INF("SHT3x (ambient) OK");
+            } else {
+                LOG_ERR("SHT3x (ambient) init failed: %d — reads will be invalid", ret);
+            }
             return;
-        default: 
+        default:
             LOG_ERR("Invalid sensor type provided: %d", sensor);
-            ret = EINVAL;
             return;
     }
 }
@@ -82,37 +89,56 @@ float read_temperature(temp_sensor_type_t sensor) {
 }
 
 
-// TODO: Perform calibration routines
 void calibrate_heart_rate_sensor(void) {
-    heart_rate_sensor_calibrated = true;
+    if (heart_rate_sensor_initialized) {
+        heart_rate_sensor_calibrated = true;
+    }
 }
 
 void calibrate_temperature_sensor(temp_sensor_type_t sensor) {
     switch(sensor) {
         case BODY:
-            temperature_sensors_calibrated.body = true;
+            if (temperature_sensors_initialized.body) {
+                temperature_sensors_calibrated.body = true;
+            }
             return;
         case AMBIENT:
-            temperature_sensors_calibrated.ambient = true;
+            if (temperature_sensors_initialized.ambient) {
+                temperature_sensors_calibrated.ambient = true;
+            }
             return;
-         default: 
+        default:
             LOG_ERR("Invalid sensor type provided: %d", sensor);
             return;
     }
 }
 
 bool is_hr_sensor_ready(void) {
-    return heart_rate_sensor_calibrated;
+    return heart_rate_sensor_initialized && heart_rate_sensor_calibrated;
 }
 
 bool is_temp_sensor_ready(temp_sensor_type_t sensor) {
     switch(sensor) {
         case BODY:
-            return temperature_sensors_calibrated.body;
+            return temperature_sensors_initialized.body &&
+                   temperature_sensors_calibrated.body;
         case AMBIENT:
-            return temperature_sensors_calibrated.ambient;
-         default: 
+            return temperature_sensors_initialized.ambient &&
+                   temperature_sensors_calibrated.ambient;
+        default:
             LOG_ERR("Invalid sensor type provided: %d", sensor);
             return false;
     }
+}
+
+bool sensors_hr_hw_initialized(void) {
+    return heart_rate_sensor_initialized;
+}
+
+bool sensors_body_temp_hw_initialized(void) {
+    return temperature_sensors_initialized.body;
+}
+
+bool sensors_ambient_temp_hw_initialized(void) {
+    return temperature_sensors_initialized.ambient;
 }

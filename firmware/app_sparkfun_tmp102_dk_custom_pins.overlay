@@ -1,0 +1,88 @@
+/*
+ * SparkFun TMP102 on **i2c0** with **custom TWIM pins** (not D14/D15).
+ *
+ * EDIT ONLY the two pin numbers in `NRF_PSEL(..., 0, PIN)` below — first line
+ * must be **TWIM_SDA**, second **TWIM_SCL** (both port **0** on this template).
+ * Pick pins that support TWIM on nRF52840 and are not used by another enabled
+ * peripheral (see Nordic PS “Pin assignments” and your `zephyr.dts` merge).
+ *
+ * Default here: **P0.28 = SDA**, **P0.29 = SCL** (Arduino **A2 / A3** on many
+ * nRF52840 DK silkscreens — confirm your board revision).
+ *
+ * west build -b nrf52840dk/nrf52840 firmware -d firmware/build -p always -- \
+ *   -DCONF_FILE=prj_sparkfun_tmp102_dk_custom_pins.conf \
+ *   -DDTC_OVERLAY_FILE=app_sparkfun_tmp102_dk_custom_pins.overlay
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	aliases {
+		tmp102-i2c = &i2c0;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pinctrl {
+	i2c0_custom_tmp102: i2c0_custom_tmp102 {
+		group1 {
+			/* vvv EDIT pin numbers (0–31) vvv */
+			psels = <NRF_PSEL(TWIM_SDA, 0, 27)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
+			/* ^^^ SDA first, SCL second ^^^ */
+			bias-pull-up;
+		};
+	};
+
+	i2c0_custom_tmp102_sleep: i2c0_custom_tmp102_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 27)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	compatible = "nordic,nrf-twim";   /* ← add this line */
+	pinctrl-0 = <&i2c0_custom_tmp102>;
+	pinctrl-1 = <&i2c0_custom_tmp102_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+};

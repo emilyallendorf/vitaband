@@ -1,31 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
-
 cmake_minimum_required(VERSION 3.20.0)
 
-option(VITABAND_BRINGUP_OVERLAY "Append bringup.overlay (disable &i2c0 and &spi1)" OFF)
-if(VITABAND_BRINGUP_OVERLAY)
-  list(APPEND EXTRA_DTC_OVERLAY_FILE "${CMAKE_CURRENT_SOURCE_DIR}/bringup.overlay")
-endif()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+list(APPEND DTS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/dts)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(vitaband_firmware)
 
+# Source logic based on your configs
 if(CONFIG_VITABAND_BLINKY_BRINGUP)
   target_sources(app PRIVATE src/main_blinky.c)
+elseif(CONFIG_VITABAND_MAX86140_HR_DEMO)
+  target_sources(app PRIVATE src/main_max86140_hr.c drivers/src/max86140.c)
+elseif(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+  target_sources(app PRIVATE src/main_ble_hr_body.c src/state_manager.c drivers/src/max86140.c drivers/src/tmp117.c)
 else()
+  # Default full application
   target_sources(app PRIVATE
-    src/main.c
-    src/power.c
-    src/sensors.c
-    src/haptics.c
-    src/mock_sensors.c
-    src/state_manager.c
-    src/test.c
-    drivers/src/tmp117.c
-    drivers/src/max86140.c
-    drivers/src/sht3x-dis.c
-    drivers/src/alarm.c
-    drivers/src/buzzer.c
+    src/main.c src/power.c src/sensors.c src/haptics.c src/mock_sensors.c
+    src/state_manager.c src/test.c drivers/src/max86140.c drivers/src/tmp117.c
+    drivers/src/sht3x-dis.c drivers/src/alarm.c drivers/src/buzzer.c 
   )
 endif()
 
@@ -33,15 +27,4 @@ if(CONFIG_BT)
   target_sources(app PRIVATE src/ble.c)
 endif()
 
-if(CONFIG_SHELL)
-  target_sources(app PRIVATE src/sensor_hw_shell.c)
-endif()
-
-target_include_directories(app PUBLIC
-  inc
-  drivers/inc
-)
-
-if(CONFIG_BT)
-  zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)
-endif()
+target_include_directories(app PUBLIC inc drivers/inc)

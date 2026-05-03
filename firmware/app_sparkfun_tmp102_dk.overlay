@@ -1,0 +1,67 @@
+/*
+ * SparkFun TMP102 on nRF52840 DK Arduino I2C:
+ *   SDA = P0.26 (D14), SCL = P0.27 (D15). Default 7-bit address 0x48 (ADD0 → GND).
+ *
+ * I2C pinmux: **not** overridden here — the DK board devicetree already maps
+ * `arduino_i2c` / `&i2c0` to P0.26/P0.27. We only turn off peripherals that
+ * conflict with RTT or commonly steal pins.
+ *
+ * If RTT shows “no ACK anywhere”: the TWIM is not electrically connected to a
+ * powered I2C slave on D14/D15 (wrong header row, open wire, no 3V3, bad
+ * Qwiic cable, wrong `west build -b` board, or dead breakout). Firmware cannot
+ * fix an open bus — work the numbered HALT checklist printed on RTT.
+ *
+ * west build -b nrf52840dk/nrf52840 firmware -d firmware/build -p always -- \
+ *   -DCONF_FILE=prj_sparkfun_tmp102_dk.conf -DDTC_OVERLAY_FILE=app_sparkfun_tmp102_dk.overlay
+ */
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	aliases {
+		tmp102-i2c = &i2c0;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+/* SPI0 pinctrl can overlap Arduino I2C on DK — keep off */
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+/*
+ * Optional: slow the bus (board default is often fine).
+ * Do not replace pinctrl-0/1 — use Nordic’s `i2c0_default` / `i2c0_sleep`.
+ */
+&i2c0 {
+	clock-frequency = <100000>;
+};

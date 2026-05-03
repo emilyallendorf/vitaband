@@ -1,0 +1,143 @@
+/*
+ * nRF52840 DK: MAX86140 on **SPI3** (Arduino D11–D13 + D10 CS) + TMP117 on **I2C0**
+ * (Arduino D14/D15 — same pins as app_tmp117_i2c.overlay).
+ *
+ * SPI3 and TWIM0 are independent blocks; both can be enabled.
+ *
+ * If TMP117 NACKs on DK, append pin swap:
+ *   -DDTC_OVERLAY_FILE="app_ble_hr_body_dk.overlay;app_tmp117_i2c_dkswap.overlay"
+ *
+ * west build ... -DCONF_FILE=prj_ble_hr_body.conf \
+ *   -DDTC_OVERLAY_FILE=app_ble_hr_body_dk.overlay
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+
+/ {
+	/* prj_ble_hr_body.conf: CONFIG_RTT_CONSOLE=y + CONFIG_SERIAL=n — route printk to Segger RTT */
+	chosen {
+		zephyr,console = &rtt0;
+		zephyr,bt-mon-uart = &rtt0;
+		zephyr,bt-c2h-uart = &rtt0;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+	};
+
+	rtt0: rtt_chan0 {
+		compatible = "segger,rtt-uart";
+		status = "okay";
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+
+	aliases {
+		emergency-button = &emergency_button;
+		buzzer = &pwm_buzzer_led;
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		emergency_button: emergency_button {
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Emergency Button";
+		};
+	};
+
+	pwm_buzzer_group {
+		compatible = "pwm-leds";
+		pwm_buzzer_led: pwm_buzzer_led {
+			pwms = <&pwm0 0 250000 PWM_POLARITY_NORMAL>;
+			label = "buzzer-pwm";
+		};
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+&pinctrl {
+	i2c0_tmp117: i2c0_tmp117 {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c0_tmp117_sleep: i2c0_tmp117_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			low-power-enable;
+		};
+	};
+
+	pwm0_buzzer_dk: pwm0_buzzer_dk {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+
+	pwm0_buzzer_dk_sleep: pwm0_buzzer_dk_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			low-power-enable;
+		};
+	};
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_buzzer_dk>;
+	pinctrl-1 = <&pwm0_buzzer_dk_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&i2c0 {
+	status = "okay";
+	compatible = "nordic,nrf-twim";
+	pinctrl-0 = <&i2c0_tmp117>;
+	pinctrl-1 = <&i2c0_tmp117_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+
+	tmp117: tmp117@49 {
+		compatible = "ti,tmp117";
+		reg = <0x49>;
+	};
+};
+
+/* Board enables SPI3 + CS=D10; add Maxim node */
+&spi3 {
+	max86140: maxim_max86140@0 {
+		compatible = "maxim,max86140";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		frame-format = <SPI_FRAME_FORMAT_MOTOROLA>;
+	};
+};

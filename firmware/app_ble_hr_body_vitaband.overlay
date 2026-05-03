@@ -1,0 +1,203 @@
+/*
+ * VitaBand PCB: MAX86140 on **SPI0** + TMP117 + **SHT3x-DIS** on **TWIM1** (P0.26 / P0.27).
+ * SHT3x is required in DT when linking **main.c** + **drivers/src/sht3x-dis.c** (same bus as
+ * **app_vitaband_base.overlay**). **main_ble_hr_body.c** does not read ambient humidity.
+ *
+ * west build ... -DCONF_FILE=prj_ble_hr_body.conf \
+ *   -DDTC_OVERLAY_FILE=app_ble_hr_body_vitaband.overlay
+ *
+ * Console: Segger RTT (`rtt0`) — required for **prj_full_vitaband.conf** (CONFIG_RTT_CONSOLE=y,
+ * CONFIG_SERIAL=n). Without **zephyr,console = &rtt0**, printk/LOG produce no output after the
+ * early boot banner.
+ *
+ * main.c + haptics.c need alias **motor-en** (not used by main_ble_hr_body.c, which toggles P0.04
+ * via gpio0 directly). led_2 is remapped off P0.04 so motor-en can use MOTOR_EN on P0.04.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+
+/ {
+	chosen {
+		zephyr,console = &rtt0;
+		zephyr,bt-mon-uart = &rtt0;
+		zephyr,bt-c2h-uart = &rtt0;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+	};
+
+	rtt0: rtt_chan0 {
+		compatible = "segger,rtt-uart";
+		status = "okay";
+	};
+
+	leds {
+		status = "disabled";
+		led0: led_0 { status = "disabled"; gpios = <&gpio0 2 GPIO_ACTIVE_LOW>; };
+		led1: led_1 { status = "disabled"; gpios = <&gpio0 3 GPIO_ACTIVE_LOW>; };
+		/* Was P0.04 — that pin is MOTOR_EN; park DK led_2 on NC (change if P0.28 is routed). */
+		led2: led_2 { status = "disabled"; gpios = <&gpio0 28 GPIO_ACTIVE_LOW>; };
+		led3: led_3 { status = "disabled"; gpios = <&gpio0 7 GPIO_ACTIVE_LOW>; };
+	};
+
+	pwmleds {
+		status = "disabled";
+		pwm_led0: pwm_led_0 { status = "disabled"; };
+	};
+
+	aliases {
+		emergency-button = &emergency_button;
+		buzzer = &pwm_buzzer_led;
+		motor-en = &motor_en_line;
+	};
+
+	/* Haptics / full main.c — same as app_vitaband_base.overlay */
+	motor_gpios {
+		compatible = "gpio-leds";
+		motor_en_line: motor_en_line {
+			gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+			label = "motor-en";
+		};
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		emergency_button: emergency_button {
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Emergency Button";
+		};
+	};
+
+	pwm_buzzer_group {
+		compatible = "pwm-leds";
+		pwm_buzzer_led: pwm_buzzer_led {
+			pwms = <&pwm0 0 250000 PWM_POLARITY_NORMAL>;
+			label = "buzzer-pwm";
+		};
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+/* SPIM0 uses the same peripheral instance as TWIM0 — keep TWIM0 off. */
+&i2c0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pinctrl {
+	spi0_max86140_vb: spi0_max86140_vb {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+		group2 {
+			psels = <NRF_PSEL(SPIM_MISO, 0, 13)>;
+		};
+	};
+
+	spi0_max86140_vb_sleep: spi0_max86140_vb_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 16)>;
+			low-power-enable;
+		};
+		group2 {
+			psels = <NRF_PSEL(SPIM_MISO, 0, 13)>;
+			low-power-enable;
+		};
+	};
+
+	i2c1_tmp117_vb: i2c1_tmp117_vb {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_tmp117_vb_sleep: i2c1_tmp117_vb_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			low-power-enable;
+		};
+	};
+
+	pwm0_buzzer_vb: pwm0_buzzer_vb {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
+		};
+	};
+
+	pwm0_buzzer_vb_sleep: pwm0_buzzer_vb_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 5)>;
+			low-power-enable;
+		};
+	};
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_buzzer_vb>;
+	pinctrl-1 = <&pwm0_buzzer_vb_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&spi0 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi0_max86140_vb>;
+	pinctrl-1 = <&spi0_max86140_vb_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+
+	max86140: maxim_max86140@0 {
+		compatible = "maxim,max86140";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		frame-format = <SPI_FRAME_FORMAT_MOTOROLA>;
+	};
+};
+
+&i2c1 {
+	status = "okay";
+	compatible = "nordic,nrf-twim";
+	pinctrl-0 = <&i2c1_tmp117_vb>;
+	pinctrl-1 = <&i2c1_tmp117_vb_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+
+	tmp117: tmp117@49 {
+		compatible = "ti,tmp117";
+		reg = <0x49>;
+	};
+
+	/* Same I²C as full app; **prj_full_vitaband.conf** sets CONFIG_SHT3XD=n for **drivers/src/sht3x-dis.c** */
+	sht3xdis: sht3xdis@45 {
+		compatible = "sensirion,sht3xd";
+		reg = <0x45>;
+		status = "okay";
+	};
+};

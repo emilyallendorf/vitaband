@@ -96,6 +96,8 @@ void mock_sensors_set_temperature(float temp);
  */
 void mock_sensors_set_battery(uint16_t voltage_mv);
 
+void mock_sensors_set_button_status(button_status_t status);
+
 /**
  * @brief Enable/disable noise on readings
  * 
@@ -133,6 +135,8 @@ float mock_read_temperature(void);
  */
 uint16_t mock_read_battery_voltage(void);
 
+button_status_t mock_read_button_status(void);
+
 /* ========================================================================== */
 /* SCENARIO PLAYBACK                                                          */
 /* ========================================================================== */
@@ -162,6 +166,9 @@ void mock_sensors_stop_scenario(void);
  */
 void mock_sensors_update_scenario(void);
 
+/** True while a scripted scenario is playing (shell `scenario <name>`). */
+bool mock_sensors_scenario_active(void);
+
 /**
  * @brief Get scenario name
  * 
@@ -180,5 +187,8 @@ const char* mock_sensors_get_scenario_name(mock_scenario_t scenario);
  * Logs current mode, values, and scenario state.
  */
 void mock_sensors_print_status(void);
+
+/** True after `test start` until `test stop` — main loop should read mock_* values. */
+bool vitaband_test_harness_running(void);
 
 #endif /* MOCK_SENSORS_H_ */

@@ -1,0 +1,60 @@
+/*
+ * BLE test bring-up: turn off unrelated peripherals so nothing muxes common pins.
+ * printk/RTT matches other VitaBand demos (delete zephyr,console; uart0 off).
+ *
+ * Target: nRF52840 DK devicetree (uart0, i2c0/1, spi0–3, pwm0, adc).
+ * VitaBand PCB: if your board file differs, copy this overlay and adjust node names.
+ *
+ *   west build ... -DCONF_FILE=prj_ble_test.conf \
+ *     -DDTC_OVERLAY_FILE=app_ble_test_min.overlay
+ */
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c0 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pwm0 {
+	status = "disabled";
+};

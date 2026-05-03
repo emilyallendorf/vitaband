@@ -59,7 +59,7 @@ typedef struct {
 /**
  * @brief Initialize haptics system
  * 
- * Sets up GPIO for LED and PWM for vibration motor and buzzer.
+ * Sets up GPIO for LED and motor; buzzer uses hardware PWM (see app.overlay).
  * Loads default alert patterns.
  * 
  * @return 0 on success, negative errno on failure
@@ -155,6 +155,11 @@ void haptics_vibration_pulse(uint8_t intensity, uint16_t duration_ms);
  * @param duration_ms How long to beep (0 = until stopped)
  */
 void haptics_buzzer_beep(uint16_t frequency_hz, uint16_t duration_ms);
+
+/**
+ * @brief Stop buzzer tone (PWM off). Does not change LED or vibration.
+ */
+void haptics_buzzer_stop(void);
 
 /* ========================================================================== */
 /* PATTERN SERIALIZATION (for BLE settings)                                  */

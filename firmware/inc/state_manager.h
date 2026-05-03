@@ -36,10 +36,8 @@ void handle_state_transition(vitaband_state_t old_state, vitaband_state_t new_st
 /**
  * @brief Processes raw sensor data and returns a risk score (1-10)
  */
-uint8_t calculate_risk_score(float skin_temp,
-                             float base_skin_temp,
-                             uint8_t heart_rate,
-                             uint8_t base_heart_rate);
+uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t hr,
+			     uint8_t base_heart_rate);
 
 /**
  * @brief Determines the state based on the 1-10 risk score.

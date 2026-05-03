@@ -1,0 +1,83 @@
+/*
+ * Same as app_sparkfun_tmp102_dk.overlay but **TWIM1 (i2c1)** on **P0.26 / P0.27**
+ * (Arduino D14/D15). **&i2c0 is disabled** so only one controller owns those pins.
+ *
+ * Use if you want to rule out a TWIM0-specific issue; wiring is still D14/D15.
+ *
+ * west build -b nrf52840dk/nrf52840 firmware -d firmware/build -p always -- \
+ *   -DCONF_FILE=prj_sparkfun_tmp102_dk_i2c1.conf \
+ *   -DDTC_OVERLAY_FILE=app_sparkfun_tmp102_dk_i2c1.overlay
+ *
+ * Note: Nordic DK DTS says i2c1 **cannot be used together with spi1** — this
+ * overlay keeps &spi1 disabled like the i2c0 variant.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	aliases {
+		tmp102-i2c = &i2c1;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c0 {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pinctrl {
+	i2c1_tmp102_dk: i2c1_tmp102_dk {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
+				<NRF_PSEL(TWIM_SCL, 0, 27)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_tmp102_dk_sleep: i2c1_tmp102_dk_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
+				<NRF_PSEL(TWIM_SCL, 0, 27)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c1 {
+	status = "okay";
+	pinctrl-0 = <&i2c1_tmp102_dk>;
+	pinctrl-1 = <&i2c1_tmp102_dk_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+};

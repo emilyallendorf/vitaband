@@ -5,13 +5,16 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#if IS_ENABLED(CONFIG_SHELL)
 #include <zephyr/shell/shell.h>
+#endif
 #include <stdlib.h>
 #include "mock_sensors.h"
 #include "state_manager.h"
+#include "power.h"
 #include "haptics.h"
 
-LOG_MODULE_REGISTER(test_harness, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(test_harness, LOG_LEVEL_DBG);
 
 /* ========================================================================== */
 /* TEST STATE                                                                 */
@@ -65,12 +68,11 @@ const char* get_status_string(button_status_t status) {
 
 static void test_loop_thread(void *arg1, void *arg2, void *arg3)
 {
-    printk("!!! THREAD IS ALIVE: Entering Loop !!!\n");
     ARG_UNUSED(arg1);
     ARG_UNUSED(arg2);
     ARG_UNUSED(arg3);
     
-    LOG_INF("=== Test Harness Started ===");
+    LOG_DBG("Test harness thread started");
     float base_temp = mock_read_temperature();
     uint8_t base_hr = mock_read_heart_rate();
     
@@ -90,14 +92,10 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
         // Pass the  previous state so the state machine knows where it is
         current_state = determine_state(previous_state, psi_value, status);
 
-        /* 4. DEBUG EVERYTHING */
-        printk("DEBUG: PSI=%.1f, CurrState=%s\n", 
-(double)psi_value, get_state_string(current_state));
-
-        /* 5. The Transition Check */
         if (current_state != previous_state) {
-            printk("!!! TRANSITION DETECTED !!!\n");
-            
+            LOG_DBG("PSI=%.1f state=%s",
+                    (double)psi_value, get_state_string(current_state));
+
             LOG_WRN("STATE CHANGE: %s -> %s", 
                     get_state_string(previous_state), 
                     get_state_string(current_state));
@@ -115,8 +113,7 @@ static void test_loop_thread(void *arg1, void *arg2, void *arg3)
 /* ========================================================================== */
 /* TEST CONTROL                                                               */
 /* ========================================================================== */
-/* Polling loop + printf/LOG + state/haptics uses more than 2 KiB in practice */
-K_THREAD_STACK_DEFINE(test_stack, 4096);
+K_THREAD_STACK_DEFINE(test_stack, 2048);
     static struct k_thread test_thread_data;
     static k_tid_t test_thread;
 
@@ -128,38 +125,27 @@ void test_harness_start(void)
     }
 
     
-    LOG_INF("Starting test harness");
+    LOG_DBG("Starting test harness");
     
     /* Initialize mock sensors */
     mock_sensors_init();
     
-    /*
-     * Do not call state_manager_init() or haptics_init() here: main() already
-     * initialized them. Re-running haptics_init() reconfigures the same LED
-     * GPIO and re-inits k_work while main's blink work may still be active.
-     *
-     * Thread priority / start delay (UART + shell):
-     * The shell runs at K_LOWEST_APPLICATION_THREAD_PRIO. If the test thread
-     * uses a *higher* priority (lower numeric value, e.g. 10), it preempts
-     * the shell immediately inside k_thread_create() and the first printk()
-     * can block on the same UART mutex the shell backend still holds while
-     * finishing the command — the thread then never appears to run.
-     *
-     * Run the harness at the same priority as the shell and defer the start
-     * slightly so "test start" completes and the shell releases TX before we
-     * printk from the new thread.
-     */
-    test_running = true;
+    // /* Initialize state manager */
+    state_manager_init();
+    
+    /* Initialize haptics */
+    haptics_init();
+    
+    /* Start test thread */
 
+    test_running = true;
+    
     test_thread = k_thread_create(&test_thread_data,
                              test_stack,
                              K_THREAD_STACK_SIZEOF(test_stack),
                              test_loop_thread,
                              NULL, NULL, NULL,
-                             0,
-                             0,
-                             K_MSEC(50));
-    printk("DEBUG: test thread scheduled (starts in 50 ms).\n");
+                             1, 0, K_NO_WAIT);
 }
 
 void test_harness_stop(void)
@@ -169,11 +155,16 @@ void test_harness_stop(void)
         return;
     }
     
-    LOG_INF("Stopping test harness");
+    LOG_DBG("Stopping test harness");
     test_running = false;
     
     /* Stop all haptics */
     haptics_stop_all();
+}
+
+bool vitaband_test_harness_running(void)
+{
+	return test_running;
 }
 
 void test_harness_print_stats(void)
@@ -182,36 +173,38 @@ void test_harness_print_stats(void)
                              test_stats.state_warning_count +
                              test_stats.state_emergency_count;
     
-    LOG_INF("=== Test Statistics ===");
-    LOG_INF("Total samples: %u", total_samples);
-    LOG_INF("State OK: %u (%.1f%%)",
+    LOG_DBG("=== Test Statistics ===");
+    LOG_DBG("Total samples: %u", total_samples);
+    LOG_DBG("State OK: %u (%.1f%%)",
             test_stats.state_ok_count,
             total_samples > 0 ? (test_stats.state_ok_count * 100.0f / total_samples) : 0);
-    LOG_INF("State WARNING: %u (%.1f%%)",
+    LOG_DBG("State WARNING: %u (%.1f%%)",
             test_stats.state_warning_count,
             total_samples > 0 ? (test_stats.state_warning_count * 100.0f / total_samples) : 0);
-    LOG_INF("State EMERGENCY: %u (%.1f%%)",
+    LOG_DBG("State EMERGENCY: %u (%.1f%%)",
             test_stats.state_emergency_count,
             total_samples > 0 ? (test_stats.state_emergency_count * 100.0f / total_samples) : 0);
-    LOG_INF("Total transitions: %u", test_stats.total_transitions);
-    
+    LOG_DBG("Total transitions: %u", test_stats.total_transitions);
+
     if (test_stats.last_transition_time > 0) {
         uint32_t time_since_transition = (k_uptime_get_32() - test_stats.last_transition_time) / 1000;
-        LOG_INF("Last transition: %u seconds ago", time_since_transition);
+        LOG_DBG("Last transition: %u seconds ago", time_since_transition);
     }
-    
-    LOG_INF("Current state: %s", get_state_string(current_state));
+
+    LOG_DBG("Current state: %s", get_state_string(current_state));
 }
 
 void test_harness_reset_stats(void)
 {
     memset(&test_stats, 0, sizeof(test_stats));
-    LOG_INF("Statistics reset");
+    LOG_DBG("Statistics reset");
 }
 
 /* ========================================================================== */
-/* SHELL COMMANDS                                                             */
+/* SHELL COMMANDS (omit when CONFIG_SHELL=n — e.g. RTT-only production images)   */
 /* ========================================================================== */
+
+#if IS_ENABLED(CONFIG_SHELL)
 
 static int cmd_test_start(const struct shell *sh, size_t argc, char **argv)
 {
@@ -474,3 +467,5 @@ SHELL_CMD_REGISTER(test, &test_cmds, "Test harness commands", NULL);
 SHELL_CMD_REGISTER(mock, &mock_cmds, "Mock sensor commands", NULL);
 SHELL_CMD_REGISTER(scenario, NULL, "Scenario commands", cmd_scenario);
 SHELL_CMD_REGISTER(haptics, &haptics_cmds, "Haptics test commands", NULL);
+
+#endif /* CONFIG_SHELL */

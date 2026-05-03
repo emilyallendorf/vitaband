@@ -1,0 +1,72 @@
+/*
+ * MAX86140/MAX86141 optical HR sensor on SPI — **nRF52840 DK Arduino SPI header**:
+ *   SPI3: MOSI=P1.13 (D11), MISO=P1.14 (D12), SCK=P1.15 (D13), CS=D10 (from board DTS).
+ *
+ * Wire the Maxim breakout/module to **D11–D13 + D10 (CS)** and 3V3/GND.
+ *
+ * **VitaBand PCB:** use `app_max86140_hr_vitaband.overlay` (SPI0: SCLK P0.15,
+ * MOSI P0.16, MISO P0.13, CS P0.14).
+ *
+ * printk: Segger RTT — uart0 disabled below.
+ *
+ * Build: prj_max86140_hr.conf + -DDTC_OVERLAY_FILE=app_max86140_hr.overlay
+ */
+
+#include <zephyr/dt-bindings/spi/spi.h>
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+/*
+ * Isolate SPI: TWIM/I2C off for this firmware so pinmux matches lab wiring / no bus fights.
+ * (Re-enable i2c0 & merge TMP117 overlay if you need both — custom merge required on PCB.)
+ */
+&i2c0 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+/* SPI0 shares P0.26/P0.27 with TWIM — keep disabled here for clarity */
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+/* Board already enables SPI3 + CS=D10; add Maxim node for drivers/src/max86140.c */
+&spi3 {
+	max86140: maxim_max86140@0 {
+		compatible = "maxim,max86140";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		frame-format = <SPI_FRAME_FORMAT_MOTOROLA>;
+	};
+};

@@ -1,0 +1,26 @@
+/*
+ * Alternate I2C0 pinmux: **SCL P0.26, SDA P0.27** (previous ambient default; opposite VitaBand PCB).
+ * Append AFTER app_ambient_pwm.overlay only if your wires / labels expect that mapping:
+ *
+ *   west build ... -- -DDTC_OVERLAY_FILE="app_ambient_pwm.overlay;app_ambient_pwm_i2c_dkswap.overlay"
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+&pinctrl {
+	i2c0_ambient: i2c0_ambient {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c0_ambient_sleep: i2c0_ambient_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			low-power-enable;
+		};
+	};
+};

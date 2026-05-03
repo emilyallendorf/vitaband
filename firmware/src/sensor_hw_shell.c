@@ -2,6 +2,8 @@
  * Shell commands for isolated hardware sensor checks (UART console).
  */
 
+#include <errno.h>
+
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
@@ -9,6 +11,42 @@
 #include "tmp117.h"
 #include "sht3x-dis.h"
 #include "max86140.h"
+
+/*
+ * Weak fallbacks when CONFIG_SHELL=y but this image omits a driver object (e.g. HR-only
+ * demo mains). Full application links strong definitions from drivers/src.
+ */
+__weak int tmp117_init(void)
+{
+	return -ENODEV;
+}
+
+__weak float tmp117_read_temperature(void)
+{
+	return -99.0f;
+}
+
+__weak int sht3xdis_init(void)
+{
+	return -ENODEV;
+}
+
+__weak int sht3xdis_read_all(float *temp_c, float *rh_pct)
+{
+	ARG_UNUSED(temp_c);
+	ARG_UNUSED(rh_pct);
+	return -ENODEV;
+}
+
+__weak int max86140_init(void)
+{
+	return -ENODEV;
+}
+
+__weak uint8_t max86140_read_heartrate(void)
+{
+	return 0U;
+}
 
 LOG_MODULE_REGISTER(sensor_hw_shell, LOG_LEVEL_INF);
 

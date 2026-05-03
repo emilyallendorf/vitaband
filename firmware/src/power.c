@@ -8,7 +8,7 @@
 
 #include "power.h"
 
-LOG_MODULE_REGISTER(power, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(power, LOG_LEVEL_DBG);
 
 static power_mode_t current_power_mode = POWER_MODE_ACTIVE;
 
@@ -42,7 +42,7 @@ void set_power_mode(power_mode_t mode)
 		break;
 	case POWER_MODE_SHUTDOWN:
 		current_power_mode = POWER_MODE_SHUTDOWN;
-		LOG_INF("Shutdown: halt (no battery rail control on this board)");
+		LOG_DBG("Shutdown: halt (no battery rail control on this board)");
 		k_sleep(K_FOREVER);
 		return;
 	}
@@ -73,5 +73,5 @@ void power_management_init(void)
 	init_system_clock();
 	current_power_mode = POWER_MODE_ACTIVE;
 	set_power_mode(POWER_MODE_ACTIVE);
-	LOG_INF("Power init (no battery monitoring)");
+	LOG_DBG("Power init (no battery monitoring)");
 }

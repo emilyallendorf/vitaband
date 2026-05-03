@@ -1,0 +1,59 @@
+/*
+ * SparkFun TMP102 on **TWIM1 (i2c1)** using the DK’s **default i2c1 pins**:
+ *   SDA = P0.30 (Arduino **A4**), SCL = P0.31 (Arduino **A5**).
+ * **&i2c0 stays disabled** so it does not fight for D14/D15.
+ *
+ * Wire TMP102 to **A4 / A5 / 3V3 / GND** (not D14/D15 for this build).
+ *
+ * west build -b nrf52840dk/nrf52840 firmware -d firmware/build -p always -- \
+ *   -DCONF_FILE=prj_sparkfun_tmp102_dk_i2c1_a4a5.conf \
+ *   -DDTC_OVERLAY_FILE=app_sparkfun_tmp102_dk_i2c1_a4a5.overlay
+ */
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	aliases {
+		tmp102-i2c = &i2c1;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c0 {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+/* Board `i2c1_default` / `i2c1_sleep` pinctrl → P0.30 / P0.31 */
+&i2c1 {
+	status = "okay";
+	clock-frequency = <100000>;
+};

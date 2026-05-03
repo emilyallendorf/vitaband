@@ -23,13 +23,14 @@ static uint8_t last_payload[VITABAND_HEALTH_NOTIFY_PAYLOAD_LEN];
 static bool    notify_enabled;
 
 static void encode_payload(uint8_t *d, uint8_t hr_bpm, float body_c, float amb_c,
-			   vitaband_state_t state, uint32_t uptime_ms)
+			   vitaband_state_t state, uint32_t uptime_ms, uint8_t risk)
 {
 	d[0] = hr_bpm;
 	memcpy(&d[1], &body_c, sizeof(float));
 	memcpy(&d[5], &amb_c, sizeof(float));
 	d[9] = (uint8_t)state;
 	memcpy(&d[10], &uptime_ms, sizeof(uint32_t));
+	d[14] = risk;
 }
 
 static ssize_t read_telemetry(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
@@ -99,7 +100,7 @@ bool vitaband_health_notify_enabled(void)
 }
 
 int vitaband_health_notify(uint8_t hr_bpm, float body_temp_c, float ambient_temp_c,
-                           vitaband_state_t state)
+			   vitaband_state_t state, uint8_t risk_score)
 {
     if (!notify_enabled) {
         return 0;
@@ -107,7 +108,8 @@ int vitaband_health_notify(uint8_t hr_bpm, float body_temp_c, float ambient_temp
 
     uint32_t uptime_ms = k_uptime_get_32();
 
-    encode_payload(last_payload, hr_bpm, body_temp_c, ambient_temp_c, state, uptime_ms);
+	encode_payload(last_payload, hr_bpm, body_temp_c, ambient_temp_c, state, uptime_ms,
+		       risk_score);
 
     return bt_gatt_notify(NULL, &ble_health_svc.attrs[2], last_payload,
                           sizeof(last_payload));

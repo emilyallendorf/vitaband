@@ -7,19 +7,215 @@ config VITABAND_BLINKY_BRINGUP
 	default n
 	help
 	  Link only src/main_blinky.c (no sensors, haptics, shell, BLE). Use
-	  prj_bringup.conf + app_bringup_min.overlay (motor GPIO + buzzer PWM; printk
-	  via Segger RTT on DK). Disable
-	  for the full application.
+	  prj_bringup.conf and pass exactly one overlay:
+	    -DDTC_OVERLAY_FILE=app_bringup_min.overlay
+	  printk via Segger RTT on DK.
+
+config VITABAND_PWM_I2C_PIN_SCOPE
+	bool "PWM scope on P0.26 / P0.27 (Arduino D14/D15; VitaBand I2C pads)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	default n
+	help
+	  pwm0 channels 1+2 → P0.26 + P0.27 at ~10 kHz (different duty cycles).
+	  TWIM/SPI that mux those pins are disabled in app_pwm_i2c_pins_scope.overlay.
+	  prj_pwm_i2c_pins_scope.conf + pass that overlay.
+
+config VITABAND_AMBIENT_PWM_DEMO
+	bool "SHT3x ambient: printk temp/RH on Segger RTT (I2C)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	default n
+	help
+	  Link main_ambient_pwm.c only (Zephyr CONFIG_SHT3XD). Prints temperature and humidity
+	  every 500 ms via RTT. Use prj_ambient_pwm.conf and pass overlay(s):
+	    -DDTC_OVERLAY_FILE=app_ambient_pwm.overlay
+	  On DK without VitaBand wiring, append:
+	    app_ambient_pwm_i2c_dkswap.overlay
+
+config VITABAND_MAX86140_HR_DEMO
+	bool "MAX86140/41 HR (SPI): printk BPM on Segger RTT"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	default n
+	help
+	  Links drivers/src/max86140.c + main_max86140_hr.c. Default overlay uses DK
+	  Arduino SPI (SPI3, CS=D10). VitaBand: edit app_max86140_hr.overlay for SPI pins + CS GPIO.
+	  prj_max86140_hr.conf + app_max86140_hr.overlay.
+
+config VITABAND_MAX86140_CS_GPIO_DEBUG
+	bool "MAX86140: toggle CS GPIO at init for scope/meter bring-up"
+	depends on VITABAND_MAX86140_HR_DEMO
+	depends on GPIO
+	default n
+	help
+	  Uses the same cs-gpios line as SPI (see overlay). Drives pin with
+	  gpio_pin_configure (incl. Nordic NRF_GPIO_DRIVE_H0H1) then physical
+	  high/low with ~10 s holds and uptime printk for RTT evidence.
+	  Enable only for debugging; reboot after use if SPI behaves oddly.
+
+config VITABAND_MAX86140_AGENT_LOG
+	bool "MAX86140: NDJSON SPI read logs on RTT (MISO bring-up)"
+	depends on VITABAND_MAX86140_HR_DEMO
+	default n
+	help
+	  Emits one JSON line per early spi_transceive (ret, rx0, rx1, reg).
+	  Capture with Segger RTT; paste into .cursor/debug-*.log or the chat for analysis.
+
+config VITABAND_MAX86140_HR_PP_TRACE
+	bool "MAX86140 HR: rate-limited IR pp/mean/thr/peaks line on RTT"
+	depends on VITABAND_MAX86140_HR_DEMO
+	default n
+	help
+	  Once per second (when samples exist), prints n, IR min/max, pp, mean, thr,
+	  peak count, BPM — for validating contact and peak gating.
+
+choice VITABAND_MAX86140_HR_PPG_MODE
+	prompt "PPG rate (IR channel timing for HR math)"
+	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST || VITABAND_STATE_MACHINE_FIRMWARE
+	default VITABAND_MAX86140_HR_PPG_100_IRRED
+	help
+	  Datasheet: N=2 (IR+Red) is only defined up to ~100 sps. For ~200 or ~400 sps
+	  the part uses N=1 with LED1 (IR) only — no red channel (SpO2 not available).
+	  512/1000 sps N=1 also exist; 500 sps is not a specific code (use 400 or 512).
+
+config VITABAND_MAX86140_HR_PPG_100_IRRED
+	bool "100 sps IR+Red (N=2, default, SpO2-friendly)"
+
+config VITABAND_MAX86140_HR_PPG_200_IR
+	bool "~200 sps IR only (N=1, better peak resolution, more power)"
+
+config VITABAND_MAX86140_HR_PPG_400_IR
+	bool "~400 sps IR only (N=1, highest load in this driver)"
+
+endchoice
+
+config VITABAND_MAX86140_HR_WRIST_PROFILE
+	bool "MAX86140 HR: wrist-oriented tuning (stronger LED, stricter peaks)"
+	depends on VITABAND_MAX86140_HR_DEMO || VITABAND_BLE_HR_BODY_TEST || VITABAND_STATE_MACHINE_FIRMWARE
+	default n
+	help
+	  This board uses MAX86140 over SPI, not the Maxim MAX32664C hub + MAX86141 stack
+	  from wrist reference designs. When enabled, the driver starts at higher IR (and red)
+	  pulse amplitude for weaker wrist coupling, increases minimum peak spacing (~452 ms),
+	  tightens AC margin / crest gating, and pairs with multi-peak / prominence rejects
+	  in the driver to reduce motion-induced duplicate peaks.
+	  For best temporal resolution on the arm, prefer ~200 or ~400 sps IR-only PPG mode.
+
+config VITABAND_MAX86140_HR_WRIST_BPM_OFFSET
+	int "Subtract from displayed BPM when wrist profile (arm wear)"
+	depends on VITABAND_MAX86140_HR_WRIST_PROFILE
+	range -30 0
+	default 0
+	help
+	  Field testing often shows wrist/arm several BPM above finger or manual count.
+	  Leave 0 when validating on the finger. For wrist/arm-only demos, try -6 to -12.
+	  Applied only to max86140_read_heartrate() output and PP trace BPM line.
+
+config VITABAND_SPARKFUN_TMP102_DK
+	bool "SparkFun TMP102 on nRF52840 DK Arduino I2C (printk RTT)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	default n
+	help
+	  Minimal I2C bring-up: TI TMP102 @ 0x48 on DK SDA=P0.26 / SCL=P0.27.
+	  prj_sparkfun_tmp102_dk.conf + app_sparkfun_tmp102_dk.overlay.
+
+config VITABAND_TMP117_I2C_DEMO
+	bool "TMP117 I2C printk test on Segger RTT"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	default n
+	help
+	  TI TMP117 via drivers/src/tmp117.c. Default overlay: VitaBand SCL=P0.26 SDA=P0.27.
+	  prj_tmp117_i2c.conf + app_tmp117_i2c.overlay; append app_tmp117_i2c_dkswap.overlay for DK.
+
+config VITABAND_BLE_TEST
+	bool "BLE test: standalone advertiser + telemetry notify"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	default n
+	help
+	  Links src/main_ble_test.c only. Runs Bluetooth peripheral advertising and
+	  exercises the custom VitaBand health telemetry GATT notify path with
+	  synthetic values, isolated from sensor/haptics drivers.
+	  Use with prj_ble_test.conf.
+
+config VITABAND_STATE_MACHINE_FIRMWARE
+	bool
+	default y if (!VITABAND_BLINKY_BRINGUP && !VITABAND_PWM_I2C_PIN_SCOPE && !VITABAND_AMBIENT_PWM_DEMO && !VITABAND_SPARKFUN_TMP102_DK && !VITABAND_TMP117_I2C_DEMO && !VITABAND_MAX86140_HR_DEMO && !VITABAND_BLE_TEST && !VITABAND_BLE_BODY_TEMP_TEST && !VITABAND_BLE_HR_BODY_TEST)
+	default n
+	help
+	  Y when the default full application (src/main.c) is selected in CMake: state
+	  machine, sensors, optional BLE. Used so MAX86140 PPG / wrist Kconfig options
+	  apply to the production app, not only the HR demo or ble_hr_body test mains.
 
 config VITABAND_NO_BLE
 	bool "Application main without Bluetooth (state machine + sensors)"
 	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_BLE_TEST
 	default n
 	help
 	  Same 1 Hz sensor loop and state machine as production main, but no BT
 	  stack, advertising, or GATT. Use with CONFIG_BT=n, for example:
 
 	    west build ... -- -DEXTRA_CONF_FILE=prj_no_ble.conf
+
+config VITABAND_BLE_BODY_TEMP_TEST
+	bool "BLE + TMP117 body temp (const HR + ambient in notify)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	depends on !VITABAND_BLE_TEST
+	depends on !VITABAND_NO_BLE
+	default n
+	help
+	  Links src/main_ble_body_temp.c + drivers/src/tmp117.c + BLE GATT (src/ble.c).
+	  Reads body temperature from the devicetree tmp117 node; advertises and notifies
+	  the VitaBand health telemetry characteristic with live body °C and fixed HR/ambient.
+	  Use prj_ble_body_temp.conf and app_ble_body_temp.overlay (plus DK swap overlay if needed).
+
+config VITABAND_BLE_HR_BODY_TEST
+	bool "BLE + MAX86140 HR + TMP117 body temp (telemetry notify)"
+	depends on !VITABAND_BLINKY_BRINGUP
+	depends on !VITABAND_AMBIENT_PWM_DEMO
+	depends on !VITABAND_SPARKFUN_TMP102_DK
+	depends on !VITABAND_TMP117_I2C_DEMO
+	depends on !VITABAND_MAX86140_HR_DEMO
+	depends on !VITABAND_PWM_I2C_PIN_SCOPE
+	depends on !VITABAND_BLE_TEST
+	depends on !VITABAND_BLE_BODY_TEMP_TEST
+	depends on !VITABAND_NO_BLE
+	default n
+	help
+	  Links main_ble_hr_body.c + drivers/src/max86140.c + drivers/src/tmp117.c + BLE GATT.
+	  Pick overlay for your board: app_ble_hr_body_dk.overlay (SPI3 + I2C0 TMP117) or
+	  app_ble_hr_body_vitaband.overlay (SPI0 MAX86140 + TWIM1 TMP117 on P0.26/P0.27 —
+	  TWIM0 cannot run with SPI0 on nRF52840). prj_ble_hr_body.conf selects 100 sps IR+Red PPG.
+
+config VITABAND_PSI_TRACE
+	bool "1 Hz RTT: NDJSON line with skin/base_skin/hr/base_hr/psi (verify risk inputs)"
+	depends on VITABAND_STATE_MACHINE_FIRMWARE
+	default n
+	help
+	  For field verification: prints one JSON line per state-machine tick (main.c) with
+	  the values passed to calculate_risk_score. Capture via Segger RTT.
 
 endmenu
 

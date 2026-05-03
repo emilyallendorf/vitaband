@@ -1,0 +1,92 @@
+/*
+ * TMP117 on I2C0 — VitaBand PCB: **SCL=P0.27, SDA=P0.26** (matches psels below).
+ * Default **reg = 0x49** (ADD0 → V+). Change to 0x48 if ADD0→GND, 0x4A/0x4B per TI table.
+ *
+ * Devicetree uses `compatible = "nordic,nrf-twim"` so Zephyr selects the TWIM driver (do not set
+ * CONFIG_I2C_NRFX_TWIM in prj — it is Kconfig-hidden).
+ *
+ * nRF52840 DK without VitaBand wiring — append **second** overlay:
+ *   app_tmp117_i2c_dkswap.overlay
+ *
+ * west build -b nrf52840dk/nrf52840 firmware -d firmware/build -p always -- \
+ *   -DCONF_FILE=prj_tmp117_i2c.conf -DDTC_OVERLAY_FILE=app_tmp117_i2c.overlay
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+
+	pwmleds {
+		status = "disabled";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pinctrl {
+	i2c0_tmp117: i2c0_tmp117 {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c0_tmp117_sleep: i2c0_tmp117_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 26)>,
+				<NRF_PSEL(TWIM_SDA, 0, 27)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	compatible = "nordic,nrf-twim";
+	pinctrl-0 = <&i2c0_tmp117>;
+	pinctrl-1 = <&i2c0_tmp117_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <100000>;
+
+	tmp117: tmp117@49 {
+		compatible = "ti,tmp117";
+		reg = <0x49>;
+	};
+
+	/* SHT3x Sensor */
+	sht3xdis: sht3xdis@45 {
+		compatible = "sensirion,sht3xd";
+		reg = <0x45>;
+		status = "okay";
+	};
+};

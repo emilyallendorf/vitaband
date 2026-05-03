@@ -1,10 +1,30 @@
 #include "state_manager.h"
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 
 #include <stdlib.h>
 
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+#include "haptics.h"
+#endif
 
-LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_INF);
+static void execute_state_actions(vitaband_state_t state);
+
+bool emergency_long_press = false;
+
+
+LOG_MODULE_REGISTER(state_manager, LOG_LEVEL_DBG);
+
+#if IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+#undef LOG_DBG
+#undef LOG_WRN
+#undef LOG_ERR
+#define LOG_DBG(...) ((void)0)
+#define LOG_WRN(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+#endif
+
 #define BASE_CORE_TEMP_C   37.0f
 #define B_T                0.25f
 #define B_H                0.01f
@@ -20,14 +40,12 @@ static float clampf (float x, float lo, float hi)
 }
 
 void state_manager_init(void) {
-    LOG_INF("Initializing State Manager...");
-    
-    // Set the initial state
-    // In mock mode, we just start at OK. 
-    // In real mode, we might check sensors first.
-    handle_state_transition(OK, OK); 
-    
-    LOG_INF("State Manager Ready.");
+    LOG_DBG("Initializing state manager");
+
+    /* Set the initial state */
+    handle_state_transition(OK, OK);
+
+    LOG_DBG("State manager ready");
 }
 void state_manager_set_baseline(float base_skin_temp, uint8_t base_heart_rate)
 {
@@ -40,14 +58,23 @@ void state_manager_set_baseline(float base_skin_temp, uint8_t base_heart_rate)
 }
 
 uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t heart_rate, uint8_t base_heart_rate) {
-    if (base_heart_rate == 0) return 0;
-    if (base_skin_temp <= 0.0f) return 0;
-    
-    //psi calculation logic
-    float st = skin_temp;
+    /*
+     * Effective baselines so BLE/app get a live PSI from current vitals instead of 0
+     * when baselines were never calibrated (common on bring-up).
+     */
     float st_0 = base_skin_temp;
-    float hr= (float) heart_rate;
-    float hr_0 = (float) base_heart_rate;
+    if (st_0 <= 0.0f) {
+        st_0 = (skin_temp > -50.0f) ? skin_temp : 34.0f;
+    }
+
+    uint8_t hr0_u = base_heart_rate;
+    if (hr0_u == 0U) {
+        hr0_u = (heart_rate > 0U) ? heart_rate : 72U;
+    }
+
+    float st = skin_temp;
+    float hr = (float)heart_rate;
+    float hr_0 = (float)hr0_u;
 
     //core temperature calculation
     float tc_0 = BASE_CORE_TEMP_C;
@@ -56,8 +83,10 @@ uint8_t calculate_risk_score(float skin_temp, float base_skin_temp, uint8_t hear
     //psi calculation
     float tc_denominator = 39.5f-tc_0;
     if (tc_denominator <= 0.1f) tc_denominator = 0.1f;
-    float hr_denominator = 180.0f-hr_0;
-    if (hr_denominator <= 1.0f) hr_denominator = 01.0f;
+    float hr_denominator = 180.0f - hr_0;
+    if (hr_denominator <= 1.0f) {
+        hr_denominator = 1.0f;
+    }
 
     float psi = 5.0f * ((tc - tc_0) / tc_denominator)
                 + 5.0f * (( hr - hr_0) / hr_denominator);
@@ -86,17 +115,24 @@ vitaband_state_t determine_state(vitaband_state_t curr_state,
 
     int64_t now = k_uptime_get();
     vitaband_state_t next_state = curr_state;
-
-    if (curr_state != EMERGENCY && button_status == PRESSED) {
-        LOG_INF("State change: %d -> %d (emergency button pressed)", curr_state, EMERGENCY);
-        ge3_start_ms = ge7_start_ms = le65_start_ms = le25_start_ms = -1;
+    if (curr_state!=EMERGENCY && button_status==PRESSED){
+        LOG_DBG("State change: %d -> %d (emergency button)", curr_state, EMERGENCY);
+        ge3_start_ms  = -1;
+        ge7_start_ms  = -1;
+        le65_start_ms = -1;
+        le25_start_ms = -1;
         return EMERGENCY;
     }
-
-    if (curr_state == EMERGENCY) {
-        if (button_status == LONG_PRESS) {
-            LOG_INF("State change: %d -> %d (emergency button long-pressed)", EMERGENCY, WARNING);
-            ge3_start_ms = ge7_start_ms = le65_start_ms = le25_start_ms = -1;
+    if (curr_state==EMERGENCY)
+    {
+        if (button_status==LONG_PRESS)
+        {
+            LOG_DBG("State change: %d -> %d (emergency long-press)",
+            EMERGENCY, WARNING);
+            ge3_start_ms  = -1;
+            ge7_start_ms  = -1;
+            le65_start_ms = -1;
+            le25_start_ms = -1;
             return WARNING;
         }
         return EMERGENCY;
@@ -125,26 +161,25 @@ vitaband_state_t determine_state(vitaband_state_t curr_state,
     } else {
         le25_start_ms = -1;
     }
-
     switch (curr_state) {
     case OK:
-        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 1000) {
             next_state = CRITICAL;
-        } else if (ge3_start_ms >= 0 && (now - ge3_start_ms) >= 30000) {
+        } else if (ge3_start_ms >= 0 && (now - ge3_start_ms) >= 3000) {
             next_state = WARNING;
         }
         break;
 
     case WARNING:
-        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 10000) {
+        if (ge7_start_ms >= 0 && (now - ge7_start_ms) >= 1000) {
             next_state = CRITICAL;
-        } else if (le25_start_ms >= 0 && (now - le25_start_ms) >= 30000) {
+        } else if (le25_start_ms >= 0 && (now - le25_start_ms) >= 3000) {
             next_state = OK;
         }
         break;
 
     case CRITICAL:
-        if (le65_start_ms >= 0 && (now - le65_start_ms) >= 15000) {
+        if (le65_start_ms >= 0 && (now - le65_start_ms) >= 1500) {
             next_state = WARNING;
         }
         break;
@@ -153,12 +188,12 @@ vitaband_state_t determine_state(vitaband_state_t curr_state,
         next_state = OK;
         break;
     }
-    if (next_state != curr_state) {
-        LOG_INF("State change: %d -> %d, psi=%.2f",
-                curr_state, next_state, (double)psi);
 
-        ge3_start_ms  = -1;
-        ge7_start_ms  = -1;
+    if (next_state != curr_state) {
+        LOG_DBG("State change: %d -> %d, psi=%.2f",
+                curr_state, next_state, (double)psi);
+        ge3_start_ms = -1;
+        ge7_start_ms = -1;
         le65_start_ms = -1;
         le25_start_ms = -1;
     }
@@ -183,13 +218,22 @@ void handle_state_transition(vitaband_state_t old_state, vitaband_state_t new_st
         return; // Safety check: do nothing if the state didn't actually change
     }
 
-    LOG_INF("--- Transitioning: %d -> %d ---", old_state, new_state);
+    LOG_DBG("Transitioning: %d -> %d", old_state, new_state);
+
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+	/* Full app links haptics.c; ble-hr-body image does not — buzzer only there via PWM in main. */
+	if (old_state == EMERGENCY && new_state != EMERGENCY) {
+		haptics_buzzer_stop();
+	}
+#endif
 
     /* 1. Perform one-shot actions based on the NEW state */
     switch (new_state) {
         case OK:
-            LOG_INF("Action: System stabilized. Clearing alerts.");
-            // haptics_stop_all(); // Example: Stop any warning vibrations
+            LOG_DBG("Action: system stabilized, clearing alerts");
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+	    haptics_stop_all();
+#endif
             break;
 
         case WARNING:
@@ -202,6 +246,12 @@ void handle_state_transition(vitaband_state_t old_state, vitaband_state_t new_st
 
         case EMERGENCY:
             LOG_ERR("Action: EMERGENCY! Activating Buzzer and BLE SOS.");
+#if !IS_ENABLED(CONFIG_VITABAND_BLE_HR_BODY_TEST)
+	    if (old_state != EMERGENCY) {
+		    /* 4000 Hz = piezo resonant; duration 0 = until exit from EMERGENCY (see stop above). */
+		    haptics_buzzer_beep(4000U, 0U);
+	    }
+#endif
             break;
 
         default:
